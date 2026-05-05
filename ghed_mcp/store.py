@@ -388,16 +388,35 @@ class GHEDStore:
             "counts": counts,
         }
 
-    def indicators(self) -> list[dict[str, Any]]:
+    def indicators(
+        self,
+        *,
+        category_1: str | None = None,
+        category_2: str | None = None,
+        skip: int = 0,
+        top: int | None = None,
+    ) -> list[dict[str, Any]]:
         conn = self._connect()
-        rows = conn.execute(
-            """
+        where = []
+        params: list[Any] = []
+        if category_1:
+            where.append("category_1 = ?")
+            params.append(category_1)
+        if category_2:
+            where.append("category_2 = ?")
+            params.append(category_2)
+        sql = """
             select indicator_code, indicator_name, long_code, category_1,
                    category_2, unit, currency, measurement_method
             from indicators
-            order by indicator_code
-            """
-        ).fetchall()
+        """
+        if where:
+            sql += " where " + " and ".join(where)
+        sql += " order by indicator_code"
+        if top is not None:
+            sql += " limit ? offset ?"
+            params.extend([top, skip])
+        rows = conn.execute(sql, params).fetchall()
         return [_dict(row) for row in rows]
 
     def indicator_map(self) -> dict[str, Indicator]:
@@ -419,28 +438,97 @@ class GHEDStore:
         ).fetchone()
         return _dict(row) if row else None
 
-    def search_indicators(self, query: str, top: int = 50) -> list[dict[str, Any]]:
+    def indicator_count(
+        self,
+        *,
+        category_1: str | None = None,
+        category_2: str | None = None,
+    ) -> int:
+        where = []
+        params: list[Any] = []
+        if category_1:
+            where.append("category_1 = ?")
+            params.append(category_1)
+        if category_2:
+            where.append("category_2 = ?")
+            params.append(category_2)
+        sql = "select count(*) from indicators"
+        if where:
+            sql += " where " + " and ".join(where)
+        return self._connect().execute(sql, params).fetchone()[0]
+
+    def indicator_categories(self) -> dict[str, Any]:
+        conn = self._connect()
+        by_category_1 = [
+            {"category_1": row["category_1"], "count": row["count"]}
+            for row in conn.execute(
+                """
+                select category_1, count(*) as count
+                from indicators
+                group by category_1
+                order by count desc, category_1
+                """
+            ).fetchall()
+        ]
+        by_category_2 = [
+            {
+                "category_1": row["category_1"],
+                "category_2": row["category_2"],
+                "count": row["count"],
+            }
+            for row in conn.execute(
+                """
+                select category_1, category_2, count(*) as count
+                from indicators
+                group by category_1, category_2
+                order by count desc, category_1, category_2
+                """
+            ).fetchall()
+        ]
+        return {"category_1": by_category_1, "category_2": by_category_2}
+
+    def search_indicators(
+        self,
+        query: str,
+        top: int = 50,
+        *,
+        category_1: str | None = None,
+        category_2: str | None = None,
+    ) -> list[dict[str, Any]]:
         needle = query.lower().strip()
         if not needle:
             return []
         like = f"%{needle}%"
+        where = [
+            """(
+                lower(coalesce(indicator_code, '')) like ?
+                or lower(coalesce(indicator_name, '')) like ?
+                or lower(coalesce(long_code, '')) like ?
+                or lower(coalesce(category_1, '')) like ?
+                or lower(coalesce(category_2, '')) like ?
+                or lower(coalesce(unit, '')) like ?
+                or lower(coalesce(currency, '')) like ?
+            )"""
+        ]
+        params: list[Any] = [like, like, like, like, like, like, like]
+        if category_1:
+            where.append("category_1 = ?")
+            params.append(category_1)
+        if category_2:
+            where.append("category_2 = ?")
+            params.append(category_2)
+        params.append(top)
         conn = self._connect()
         rows = conn.execute(
-            """
+            f"""
             select indicator_code, indicator_name, long_code, category_1,
                    category_2, unit, currency, measurement_method
             from indicators
-            where lower(coalesce(indicator_code, '')) like ?
-               or lower(coalesce(indicator_name, '')) like ?
-               or lower(coalesce(long_code, '')) like ?
-               or lower(coalesce(category_1, '')) like ?
-               or lower(coalesce(category_2, '')) like ?
-               or lower(coalesce(unit, '')) like ?
-               or lower(coalesce(currency, '')) like ?
+            where {" and ".join(where)}
             order by indicator_code
             limit ?
             """,
-            (like, like, like, like, like, like, like, top),
+            params,
         ).fetchall()
         return [_dict(row) for row in rows]
 

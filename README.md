@@ -26,8 +26,13 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `cache_status` | Show workbook, SQLite cache, source document, and row counts |
 | `check_for_updates` | Compare the cached source document with the current all-data workbook metadata |
 | `version` | Return workbook version and cache provenance |
-| `list_indicators` | Paginated GHED codebook |
-| `search_indicators` | Search indicator names, codes, categories, units, and long codes |
+| `methodology_guide` | Explain GHED variable classes, categories, cautions, and curated topics |
+| `topics_index` | Curated topic map for common health-expenditure questions |
+| `list_variable_categories` | Counts by GHED Codebook category |
+| `list_indicators` | Paginated headline indicators only (`category_1 = INDICATORS`) |
+| `list_variables` | Paginated full GHED codebook variables |
+| `search_indicators` | Search headline indicators by default |
+| `search_variables` | Search all variables, including detailed SHA series |
 | `list_countries` | Countries and territories in the workbook |
 | `find_country_code` | Resolve a country name fragment to ISO3 |
 | `get_indicator_metadata` | Codebook metadata for one variable |
@@ -55,6 +60,16 @@ source-document.json
 ```
 
 The XLSX remains the source of truth. The SQLite database is rebuilt when the workbook file changes and is used for fast MCP queries.
+
+## Methodology Awareness
+
+GHED's all-data workbook has thousands of variables because it contains both user-facing indicators and detailed SHA 2011 accounting series. The MCP treats these differently:
+
+- `INDICATORS` are the headline indicators for ordinary policy analysis.
+- `HEALTH EXPENDITURE DATA` contains detailed SHA expenditure series by function, provider, disease/condition, financing scheme, revenue, PHC, age, capital, and COVID reporting.
+- `MACRO DATA` contains denominators and conversion variables such as GDP, population, exchange rates, and price indexes.
+
+Use `methodology_guide` before broad analytical requests and `topics_index` to map common questions to recommended codes.
 
 ## Development
 

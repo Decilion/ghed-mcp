@@ -57,6 +57,16 @@ def sample_workbook(tmp_path: Path) -> Path:
         "-",
         "OOPS / CHE",
     ])
+    ws.append([
+        "hc11",
+        "Inpatient curative care",
+        "sha11.HC.1.1",
+        "HEALTH EXPENDITURE DATA",
+        "HEALTH CARE FUNCTIONS",
+        "National Currency Unit (NCU) millions",
+        "-",
+        "-",
+    ])
 
     ws = wb.create_sheet("Metadata")
     ws.append([
@@ -111,6 +121,30 @@ async def test_search_indicators():
     assert result["items"][0]["indicator_code"] == "oops_che"
 
 
+async def test_list_indicators_is_headline_only():
+    result = await server.list_indicators()
+
+    assert result["total"] == 2
+    assert {row["indicator_code"] for row in result["items"]} == {
+        "che_gdp",
+        "oops_che",
+    }
+
+
+async def test_list_variables_includes_detailed_series():
+    result = await server.list_variables(category_1="HEALTH EXPENDITURE DATA")
+
+    assert result["total"] == 1
+    assert result["items"][0]["indicator_code"] == "hc11"
+
+
+async def test_methodology_guide_has_variable_classes():
+    result = await server.methodology_guide()
+
+    assert "INDICATORS" in result["summary"]["variable_classes"]
+    assert result["current_counts"]["category_1"][0]["count"] >= 1
+
+
 async def test_compare_countries_latest_csv():
     result = await server.compare_countries(
         "che_gdp",
@@ -152,7 +186,7 @@ async def test_cache_status_reports_sqlite_counts():
 
     assert result["cache"]["sqlite_current"] is True
     assert result["cache"]["counts"]["countries"] == 2
-    assert result["cache"]["counts"]["indicators"] == 2
+    assert result["cache"]["counts"]["indicators"] == 3
     assert result["cache"]["counts"]["observations"] == 6
 
 

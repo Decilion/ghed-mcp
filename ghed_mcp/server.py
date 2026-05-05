@@ -14,6 +14,7 @@ from .client import (
     provenance,
     read_source_manifest,
 )
+from .methodology import methodology_summary, topic_index
 from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, rows_to_csv
 
 mcp = FastMCP("ghed")
@@ -90,29 +91,124 @@ async def version() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
-    """List GHED indicators from the Codebook sheet."""
-    top = max(1, min(top, 200))
-    skip = max(0, skip)
+async def methodology_guide() -> dict[str, Any]:
+    """Explain how GHED variables are organized and how to choose the right series."""
     store = await get_store()
-    indicators = store.indicators()
-    page = indicators[skip:skip + top]
     return {
-        "count": len(page),
-        "total": len(indicators),
-        "skip": skip,
-        "top": top,
-        "items": page,
+        **methodology_summary(),
+        "current_counts": store.indicator_categories(),
+        "version": store.version(),
     }
 
 
 @mcp.tool()
-async def search_indicators(query: str, top: int = 50) -> dict[str, Any]:
-    """Search GHED indicators by code, name, long code, category, unit, or currency."""
+async def topics_index() -> dict[str, Any]:
+    """Curated GHED topic index mapping common user requests to variable codes."""
+    return topic_index()
+
+
+@mcp.tool()
+async def list_variable_categories() -> dict[str, Any]:
+    """List GHED variable category counts from the Codebook."""
+    store = await get_store()
+    return store.indicator_categories()
+
+
+@mcp.tool()
+async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
+    """List headline GHED indicators only (category_1 = INDICATORS)."""
+    top = max(1, min(top, 200))
+    skip = max(0, skip)
+    store = await get_store()
+    items = store.indicators(category_1="INDICATORS", skip=skip, top=top)
+    return {
+        "scope": "headline_indicators",
+        "category_1": "INDICATORS",
+        "count": len(items),
+        "total": store.indicator_count(category_1="INDICATORS"),
+        "skip": skip,
+        "top": top,
+        "items": items,
+    }
+
+
+@mcp.tool()
+async def list_variables(
+    category_1: str | None = None,
+    category_2: str | None = None,
+    skip: int = 0,
+    top: int = 50,
+) -> dict[str, Any]:
+    """List all GHED Codebook variables, optionally filtered by category."""
+    top = max(1, min(top, 200))
+    skip = max(0, skip)
+    store = await get_store()
+    items = store.indicators(
+        category_1=category_1,
+        category_2=category_2,
+        skip=skip,
+        top=top,
+    )
+    return {
+        "scope": "all_codebook_variables",
+        "category_1": category_1,
+        "category_2": category_2,
+        "count": len(items),
+        "total": store.indicator_count(category_1=category_1, category_2=category_2),
+        "skip": skip,
+        "top": top,
+        "items": items,
+    }
+
+
+@mcp.tool()
+async def search_indicators(
+    query: str,
+    top: int = 50,
+    category_1: str = "INDICATORS",
+    category_2: str | None = None,
+) -> dict[str, Any]:
+    """Search headline GHED indicators by default; pass category_1=None for all variables."""
     top = max(1, min(top, 200))
     store = await get_store()
-    items = store.search_indicators(query, top=top)
-    return {"query": query, "count": len(items), "items": items}
+    items = store.search_indicators(
+        query,
+        top=top,
+        category_1=category_1,
+        category_2=category_2,
+    )
+    return {
+        "query": query,
+        "category_1": category_1,
+        "category_2": category_2,
+        "count": len(items),
+        "items": items,
+    }
+
+
+@mcp.tool()
+async def search_variables(
+    query: str,
+    top: int = 50,
+    category_1: str | None = None,
+    category_2: str | None = None,
+) -> dict[str, Any]:
+    """Search all GHED Codebook variables, including detailed SHA series."""
+    top = max(1, min(top, 200))
+    store = await get_store()
+    items = store.search_indicators(
+        query,
+        top=top,
+        category_1=category_1,
+        category_2=category_2,
+    )
+    return {
+        "query": query,
+        "category_1": category_1,
+        "category_2": category_2,
+        "count": len(items),
+        "items": items,
+    }
 
 
 @mcp.tool()
@@ -340,6 +436,31 @@ async def indicator_resource(indicator_code: str) -> str:
     ]
     if metadata.get("measurement_method"):
         lines.extend(["", "## Method of measurement", str(metadata["measurement_method"])])
+    return "\n".join(lines)
+
+
+@mcp.resource("ghed://methodology")
+async def methodology_resource() -> str:
+    """Readable methodology guide for GHED variable selection."""
+    guide = methodology_summary()
+    lines = [
+        "# GHED Methodology Guide",
+        "",
+        guide["summary"]["source_of_truth"],
+        "",
+        guide["summary"]["framework"],
+        "",
+        "## Variable Classes",
+    ]
+    for name, text in guide["summary"]["variable_classes"].items():
+        lines.append(f"- `{name}`: {text}")
+    lines.extend(["", "## Analysis Cautions"])
+    for caution in guide["summary"]["analysis_cautions"]:
+        lines.append(f"- {caution}")
+    lines.extend(["", "## Curated Topics"])
+    for topic_id, topic in guide["topics"].items():
+        codes = ", ".join(f"`{c}`" for c in topic["indicator_codes"])
+        lines.append(f"- `{topic_id}`: {topic['description']} {codes}")
     return "\n".join(lines)
 
 

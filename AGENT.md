@@ -19,3 +19,5 @@
 - SQLite schema includes `countries`, `indicators`, `observations`, `metadata`, `version_lines`, and `manifest`.
 - Full March 2026 workbook conversion produced 195 countries, 4,115 indicators, 3,034,483 observations, and 32,667 metadata rows; SQLite size was about 294 MB.
 - Added `cache_status` and `check_for_updates` MCP tools, plus `source-document.json` to record which Documentation Centre file was downloaded.
+- Added methodology awareness: `methodology_guide`, `topics_index`, `list_variable_categories`, `list_variables`, and `search_variables`.
+- Changed `list_indicators` / `search_indicators` semantics to focus on headline `category_1 = INDICATORS`; full-codebook access now uses variable tools.
