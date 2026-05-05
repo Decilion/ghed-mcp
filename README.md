@@ -2,7 +2,7 @@
 
 An MCP server for the World Health Organization's Global Health Expenditure Database (GHED).
 
-GHED does not expose a stable documented API in the same way the WHO GHO OData feed does. This server uses the public GHED bulk workbook, caches it locally, and exposes task-shaped MCP tools for health expenditure analysis.
+GHED does not expose a stable documented API in the same way the WHO GHO OData feed does. This server discovers the current public GHED all-data workbook from the Documentation Centre, caches it locally, and exposes task-shaped MCP tools for health expenditure analysis.
 
 ## Install
 
@@ -36,9 +36,13 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 
 ## Data Source
 
-The default source is:
+The server discovers the current all-data workbook from:
 
-`https://apps.who.int/nha/database/Home/IndicatorsDownload/en`
+`https://apps.who.int/nha/database/DocumentationCentre/GetTree/en`
+
+It then downloads the matching file through:
+
+`https://apps.who.int/nha/database/DocumentationCentre/GetFile/{document_id}/en`
 
 The workbook is cached under `~/.cache/ghed-mcp/ghed.xlsx` unless `GHED_MCP_CACHE_DIR` is set.
 

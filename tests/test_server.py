@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
+from ghed_mcp.client import document_download_url, find_latest_all_data_document
 from ghed_mcp import server
 
 
@@ -140,3 +141,38 @@ async def test_country_profile_uses_default_indicators():
         "oops_che",
     ]
     assert result["indicators"][0]["year"] == 2023
+
+
+def test_find_latest_all_data_document_uses_documentation_tree():
+    tree = {
+        "IsFolder": True,
+        "Children": [
+            {
+                "IsFolder": True,
+                "Name": "Download GHED all data",
+                "Children": [
+                    {
+                        "IsFolder": False,
+                        "Identifier": 1,
+                        "Name": "GHED all data (December 2025)",
+                        "FileType": ".xlsx",
+                        "DateModified": "/Date(1765790273000)/",
+                    },
+                    {
+                        "IsFolder": False,
+                        "Identifier": 64396441,
+                        "Name": "GHED all data (March 2026)",
+                        "FileType": ".xlsx",
+                        "DateModified": "/Date(1774900345000)/",
+                    },
+                ],
+            }
+        ],
+    }
+
+    doc = find_latest_all_data_document(tree)
+
+    assert doc["Identifier"] == 64396441
+    assert document_download_url(doc["Identifier"]).endswith(
+        "/DocumentationCentre/GetFile/64396441/en"
+    )

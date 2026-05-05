@@ -12,3 +12,6 @@
 - Built both sdist and wheel with `.venv/bin/python -m build`.
 - Initialized git on branch `main` and committed the initial scaffold as `ed64bbc`.
 - Registered the local MCP globally with Codex as `ghed`, pointing to `.venv/bin/ghed-mcp`.
+- Found that the Data Explorer `IndicatorsDownload` endpoint returned the December 2025 workbook, while the Documentation Centre tree exposes `GHED all data (March 2026)` via document id `64396441`.
+- Verified the March/April workbook version line: `Last updated: April 1st, 2026`, with a GHED partial update for Jordan, Montenegro, and Togo.
+- Updated the downloader design to discover the latest all-data workbook from `/DocumentationCentre/GetTree/en` and download it via `/DocumentationCentre/GetFile/{id}/en`.
