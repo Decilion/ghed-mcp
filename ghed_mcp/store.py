@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,33 @@ DEFAULT_PROFILE_INDICATORS = [
     "gghed_gge",
 ]
 SCHEMA_VERSION = 1
+COUNTRY_ALIASES: dict[str, str] = {
+    "US": "USA",
+    "U.S.": "USA",
+    "U.S.A.": "USA",
+    "USA": "USA",
+    "UK": "GBR",
+    "U.K.": "GBR",
+    "BRITAIN": "GBR",
+    "GREAT BRITAIN": "GBR",
+    "RUSSIA": "RUS",
+    "SOUTH KOREA": "KOR",
+    "KOREA": "KOR",
+    "NORTH KOREA": "PRK",
+    "IRAN": "IRN",
+    "VIETNAM": "VNM",
+    "VIET NAM": "VNM",
+    "VENEZUELA": "VEN",
+    "BOLIVIA": "BOL",
+    "TANZANIA": "TZA",
+    "DRC": "COD",
+    "DR CONGO": "COD",
+    "CZECHIA": "CZE",
+    "CZECH REPUBLIC": "CZE",
+    "TURKEY": "TUR",
+    "TÜRKIYE": "TUR",
+    "TURKIYE": "TUR",
+}
 
 
 @dataclass(frozen=True)
@@ -69,6 +97,12 @@ def _utc_now() -> str:
 
 def _dict(row: sqlite3.Row) -> dict[str, Any]:
     return dict(row)
+
+
+def _alias_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.strip())
+    ascii_value = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return " ".join(ascii_value.upper().split())
 
 
 class GHEDStore:
@@ -552,21 +586,37 @@ class GHEDStore:
         needle = query.lower().strip()
         like = f"%{needle}%"
         conn = self._connect()
+        alias_code = COUNTRY_ALIASES.get(_alias_key(query))
+        alias_clause = " or country_code = ?" if alias_code else ""
+        params: list[Any] = [like, like]
+        if alias_code:
+            params.append(alias_code)
         rows = conn.execute(
-            """
+            f"""
             select country_code, country_name, region, income
             from countries
-            where lower(country_code) like ? or lower(country_name) like ?
+            where lower(country_code) like ? or lower(country_name) like ?{alias_clause}
             order by country_name
             """,
-            (like, like),
+            params,
         ).fetchall()
         return [_dict(row) for row in rows]
 
     def resolve_country(self, country: str) -> str:
         value = country.strip()
+        if not value:
+            raise ValueError("Country cannot be empty.")
         upper = value.upper()
         conn = self._connect()
+        alias_code = COUNTRY_ALIASES.get(_alias_key(value))
+        if alias_code:
+            row = conn.execute(
+                "select country_code from countries where country_code = ?",
+                (alias_code,),
+            ).fetchone()
+            if row:
+                return row["country_code"]
+
         row = conn.execute(
             "select country_code from countries where country_code = ?",
             (upper,),

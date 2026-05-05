@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 
 from .client import (
     GHEDError,
@@ -15,12 +16,18 @@ from .client import (
     read_source_manifest,
 )
 from .methodology import (
+    RESEARCH_USE_CASES,
+    TOPICS,
     research_use_cases as get_research_use_cases,
     methodology_summary,
     suggest_use_cases,
     topic_index,
 )
 from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, rows_to_csv
+
+# FastMCP builds each tool's argument model with this base. Forbid unknown
+# keyword arguments so misspelled filters fail instead of being ignored.
+ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 
 mcp = FastMCP("ghed")
 
@@ -237,11 +244,19 @@ async def list_countries() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def find_country_code(country_name: str) -> dict[str, Any]:
-    """Find ISO3 country codes by name or code fragment."""
+async def find_country_code(
+    country: str | None = None,
+    country_name: str | None = None,
+) -> dict[str, Any]:
+    """Find ISO3 country codes by name, alias, or code fragment."""
+    if country and country_name:
+        raise ValueError("Pass either 'country' or 'country_name', not both.")
+    query = country or country_name
+    if not query:
+        raise ValueError("Missing required 'country' parameter.")
     store = await get_store()
-    matches = store.find_countries(country_name)
-    return {"query": country_name, "count": len(matches), "matches": matches}
+    matches = store.find_countries(query)
+    return {"query": query, "count": len(matches), "matches": matches}
 
 
 @mcp.tool()
@@ -366,6 +381,15 @@ async def build_research_panel(
         "possibly_truncated": len(rows) >= top,
         "format": fmt,
     }
+    if result["possibly_truncated"]:
+        result.setdefault("warnings", []).append({
+            "type": "top_limit_reached",
+            "message": (
+                "The result reached the requested top limit, so additional rows "
+                "may be available. Increase top or narrow countries/years."
+            ),
+            "top": top,
+        })
     if fmt == "csv":
         result["csv"] = rows_to_csv(rows)
     else:
@@ -587,6 +611,60 @@ async def methodology_resource() -> str:
         )
         suffix = codes or categories
         lines.append(f"- `{use_case}`: {payload['description']} {suffix}")
+    return "\n".join(lines)
+
+
+@mcp.resource("ghed://topics/{topic_id}")
+async def topic_resource(topic_id: str) -> str:
+    """Readable resource view of one curated GHED topic."""
+    topic = TOPICS.get(topic_id)
+    if topic is None:
+        available = ", ".join(sorted(TOPICS))
+        return (
+            f"Unknown GHED topic `{topic_id}`.\n\n"
+            f"Available topics: {available}\n\n"
+            "Use the topics_index tool for the full structured listing."
+        )
+    lines = [
+        f"# {topic_id}",
+        "",
+        topic["description"],
+        "",
+        "## Indicator Codes",
+    ]
+    lines.extend(f"- `{code}`" for code in topic.get("indicator_codes", []))
+    lines.extend([
+        "",
+        "Use these codes with get_indicator_metadata, data_availability, "
+        "get_indicator_data, compare_countries, or build_research_panel.",
+    ])
+    return "\n".join(lines)
+
+
+@mcp.resource("ghed://research-use-cases/{use_case}")
+async def research_use_case_resource(use_case: str) -> str:
+    """Readable resource view of one GHED research use case."""
+    payload = RESEARCH_USE_CASES.get(use_case)
+    if payload is None:
+        available = ", ".join(sorted(RESEARCH_USE_CASES))
+        return (
+            f"Unknown GHED research use case `{use_case}`.\n\n"
+            f"Available use cases: {available}\n\n"
+            "Use the research_use_cases tool for the full structured listing."
+        )
+    lines = [f"# {use_case}", "", payload["description"]]
+    if payload.get("recommended_codes"):
+        lines.extend(["", "## Recommended Codes"])
+        lines.extend(f"- `{code}`" for code in payload["recommended_codes"])
+    if payload.get("recommended_categories"):
+        lines.extend(["", "## Recommended Categories"])
+        lines.extend(f"- {category}" for category in payload["recommended_categories"])
+    if payload.get("typical_questions"):
+        lines.extend(["", "## Typical Questions"])
+        lines.extend(f"- {question}" for question in payload["typical_questions"])
+    if payload.get("cautions"):
+        lines.extend(["", "## Cautions"])
+        lines.extend(f"- {caution}" for caution in payload["cautions"])
     return "\n".join(lines)
 
 

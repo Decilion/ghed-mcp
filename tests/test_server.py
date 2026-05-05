@@ -36,6 +36,10 @@ def sample_workbook(tmp_path: Path) -> Path:
         "Peru", "PER", "AMR", "Upper-middle", 2022,
         5.5, 28.0, 90.0, 50.0, 45.0, 5.0, 90.0, 40.0, 50.0,
     ])
+    ws.append([
+        "United States of America", "USA", "AMR", "High", 2023,
+        16.5, 10.0, 1000.0, 500.0, 400.0, 100.0, 1000.0, 650.0, 350.0,
+    ])
 
     ws = wb.create_sheet("Codebook")
     ws.append([
@@ -285,6 +289,46 @@ async def test_compare_countries_latest_csv():
     assert result["warnings"][0]["type"] == "mixed_latest_years"
 
 
+async def test_find_country_code_accepts_country_and_alias():
+    via_canonical = await server.find_country_code(country="United States")
+    via_deprecated_alias = await server.find_country_code(country_name="United States")
+    via_common_alias = await server.find_country_code(country="US")
+
+    assert via_canonical["matches"] == via_deprecated_alias["matches"]
+    assert via_common_alias["matches"][0]["country_code"] == "USA"
+
+    with pytest.raises(ValueError, match="not both"):
+        await server.find_country_code(country="Colombia", country_name="Colombia")
+
+    with pytest.raises(ValueError, match="'country' parameter"):
+        await server.find_country_code()
+
+
+async def test_compare_countries_resolves_country_aliases():
+    result = await server.compare_countries(
+        "che_gdp",
+        ["US"],
+        latest_only=True,
+    )
+
+    assert result["countries_resolved"] == [{"input": "US", "code": "USA"}]
+    assert result["rows"][0]["country_name"] == "United States of America"
+
+
+async def test_tool_arguments_reject_unknown_names():
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError, match="Extra inputs are not permitted"):
+        await server.mcp._tool_manager.call_tool(
+            "get_indicator_data",
+            {
+                "indicator_code": "che_gdp",
+                "countries": ["Peru"],
+                "year_from": 2022,
+            },
+        )
+
+
 async def test_get_country_metadata():
     result = await server.get_country_metadata(country="Colombia", indicator_code="che_gdp")
 
@@ -307,9 +351,9 @@ async def test_cache_status_reports_sqlite_counts():
     result = await server.cache_status()
 
     assert result["cache"]["sqlite_current"] is True
-    assert result["cache"]["counts"]["countries"] == 2
+    assert result["cache"]["counts"]["countries"] == 3
     assert result["cache"]["counts"]["indicators"] == 10
-    assert result["cache"]["counts"]["observations"] == 27
+    assert result["cache"]["counts"]["observations"] == 36
 
 
 async def test_additive_hierarchy_formula_and_sha_children():
@@ -334,6 +378,24 @@ async def test_build_additive_breakdown_balances():
     assert result["child_sum"] == 80.0
     assert result["balanced"] is True
     assert [row["indicator_code"] for row in result["children"]] == ["fs1", "fs3"]
+
+
+async def test_build_research_panel_warns_when_top_limit_reached():
+    result = await server.build_research_panel(["che_gdp"], top=2)
+
+    assert result["possibly_truncated"] is True
+    assert result["warnings"][0]["type"] == "top_limit_reached"
+
+
+async def test_topic_and_research_use_case_resources():
+    topic = await server.topic_resource("out_of_pocket")
+    use_case = await server.research_use_case_resource("financial_protection_oop")
+    missing = await server.topic_resource("missing")
+
+    assert "# out_of_pocket" in topic
+    assert "`oops_che`" in topic
+    assert "# financial_protection_oop" in use_case
+    assert "Unknown GHED topic" in missing
 
 
 def test_find_latest_all_data_document_uses_documentation_tree():
