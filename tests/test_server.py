@@ -242,6 +242,17 @@ async def test_suggest_variables_for_research_question():
     assert "financial_protection_oop" in use_cases
 
 
+async def test_suggest_variables_includes_alias_matches():
+    result = await server.suggest_variables_for_research_question(
+        "Which countries have the highest fiscal priority?"
+    )
+
+    assert {
+        "indicator_code": "gghed_gge",
+        "matched_aliases": ["fiscal priority"],
+    } in result["matched_indicator_aliases"]
+
+
 async def test_data_availability_for_panel_inputs():
     result = await server.data_availability(
         ["che_gdp", "oops_che"],
@@ -336,6 +347,20 @@ async def test_compare_country_group():
     assert result["warnings"][0]["type"] == "mixed_latest_years"
 
 
+async def test_summarize_country_group():
+    result = await server.summarize_country_group(
+        "che_gdp",
+        income="Upper-middle",
+        latest_only=True,
+    )
+
+    assert result["stats"]["n"] == 2
+    assert result["stats"]["median"] == 6.9
+    assert result["coverage_ratio"] == 1.0
+    assert result["top"][0]["country_code"] == "COL"
+    assert result["warnings"][0]["type"] == "mixed_latest_years"
+
+
 async def test_find_country_code_accepts_country_and_alias():
     via_canonical = await server.find_country_code(country="United States")
     via_deprecated_alias = await server.find_country_code(country_name="United States")
@@ -414,6 +439,18 @@ async def test_additive_hierarchy_formula_and_sha_children():
     assert rel["children"] == ["hc1", "hc2"]
 
 
+async def test_explain_indicator_relationship():
+    parent = await server.explain_indicator_relationship("gghed")
+    child = await server.explain_indicator_relationship("fs1")
+    share = await server.explain_indicator_relationship("che_gdp")
+
+    assert parent["role"] == "additive_parent"
+    assert parent["additive_children"][0]["children"] == ["fs1", "fs3"]
+    assert child["role"] == "component"
+    assert child["known_parents"][0]["parent_code"] == "gghed"
+    assert share["role"] == "derived_ratio_or_share"
+
+
 async def test_build_additive_breakdown_balances():
     result = await server.build_additive_breakdown(
         "gghed",
@@ -432,6 +469,58 @@ async def test_build_research_panel_warns_when_top_limit_reached():
 
     assert result["possibly_truncated"] is True
     assert result["warnings"][0]["type"] == "top_limit_reached"
+
+
+async def test_trend_and_rank_tools():
+    trend = await server.indicator_trend(
+        "che_gdp",
+        countries=["Colombia", "Peru"],
+        year_start=2022,
+        year_end=2023,
+    )
+    by_code = {row["country_code"]: row for row in trend["rows"]}
+    assert by_code["COL"]["absolute_change"] == pytest.approx(0.2)
+    assert by_code["PER"]["year_count"] == 1
+
+    ranked = await server.rank_country_changes(
+        "che_gdp",
+        countries=["Colombia", "Peru"],
+        year_start=2022,
+        year_end=2023,
+    )
+    assert ranked["rows"][0]["country_code"] == "COL"
+
+    compared = await server.compare_trends(
+        ["che_gdp", "oops_che"],
+        countries=["Colombia"],
+    )
+    assert [item["indicator_code"] for item in compared["items"]] == [
+        "che_gdp",
+        "oops_che",
+    ]
+
+
+async def test_assess_data_quality():
+    result = await server.assess_data_quality("che_gdp", country="Colombia")
+
+    assert result["availability"]["observation_count"] == 2
+    assert result["metadata_summary"]["data_types"] == {"Documented": 1}
+    assert result["metadata_summary"]["rows_with_country_footnotes"] == 1
+    assert result["warnings"][0]["type"] == "country_notes_present"
+
+
+async def test_build_research_package():
+    result = await server.build_research_package(
+        ["che_gdp", "oops_che"],
+        countries=["Colombia"],
+        year_start=2022,
+        year_end=2023,
+    )
+
+    assert result["count"] == 4
+    assert result["data_csv"].startswith("indicator_code,indicator_name")
+    assert "che_gdp" in result["codebook_csv"]
+    assert "GHED Research Extract" in result["readme"]
 
 
 async def test_topic_and_research_use_case_resources():

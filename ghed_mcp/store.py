@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import sqlite3
+import statistics
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -103,6 +104,38 @@ def _alias_key(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value.strip())
     ascii_value = "".join(ch for ch in normalized if not unicodedata.combining(ch))
     return " ".join(ascii_value.upper().split())
+
+
+def _pct_change(start: float | None, end: float | None) -> float | None:
+    if start in (None, 0) or end is None:
+        return None
+    return (float(end) - float(start)) / abs(float(start))
+
+
+def _cagr(start: float | None, end: float | None, periods: int | None) -> float | None:
+    if start is None or end is None or periods is None or periods <= 0:
+        return None
+    if start <= 0 or end <= 0:
+        return None
+    return (float(end) / float(start)) ** (1 / periods) - 1
+
+
+def _summary_stats(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {
+            "n": 0,
+            "mean": None,
+            "median": None,
+            "min": None,
+            "max": None,
+        }
+    return {
+        "n": len(values),
+        "mean": sum(values) / len(values),
+        "median": statistics.median(values),
+        "min": min(values),
+        "max": max(values),
+    }
 
 
 class GHEDStore:
@@ -1046,6 +1079,240 @@ class GHEDStore:
         rows = self._connect().execute(sql, params).fetchall()
         return [_dict(row) for row in rows]
 
+    def group_summary(
+        self,
+        indicator_code: str,
+        *,
+        region: str | None = None,
+        income: str | None = None,
+        year: int | None = None,
+        latest_only: bool = True,
+        top_n: int = 5,
+    ) -> dict[str, Any]:
+        if not region and not income:
+            raise ValueError("Pass at least one of 'region' or 'income'.")
+        if year is not None:
+            rows = self.indicator_data(
+                indicator_code,
+                region=region,
+                income=income,
+                year_start=year,
+                year_end=year,
+                latest_only=False,
+                top=10000,
+            )
+        else:
+            rows = self.indicator_data(
+                indicator_code,
+                region=region,
+                income=income,
+                latest_only=latest_only,
+                top=10000,
+            )
+        values = [float(row["value"]) for row in rows if row.get("value") is not None]
+        sorted_rows = sorted(
+            rows,
+            key=lambda row: (
+                row.get("value") is None,
+                row.get("value") if row.get("value") is not None else 0,
+            ),
+        )
+        years = sorted({row["year"] for row in rows if row.get("year") is not None})
+        countries_in_group = self.countries(region=region, income=income)
+        covered = {row["country_code"] for row in rows}
+        return {
+            "indicator": self.get_indicator(indicator_code),
+            "region": region,
+            "income": income,
+            "year": year,
+            "latest_only": latest_only if year is None else False,
+            "country_count": len(countries_in_group),
+            "countries_with_data": len(covered),
+            "coverage_ratio": (
+                None if not countries_in_group else len(covered) / len(countries_in_group)
+            ),
+            "stats": _summary_stats(values),
+            "years_seen": years,
+            "bottom": sorted_rows[:top_n],
+            "top": list(reversed(sorted_rows[-top_n:])),
+            "warnings": (
+                [{
+                    "type": "mixed_latest_years",
+                    "message": (
+                        "The group summary uses different latest years across "
+                        "countries. Interpret ranks and summary statistics with care."
+                    ),
+                    "years_seen": years,
+                }] if latest_only and year is None and len(years) > 1 else []
+            ),
+        }
+
+    def indicator_trends(
+        self,
+        indicator_code: str,
+        *,
+        countries: Iterable[str] | None = None,
+        region: str | None = None,
+        income: str | None = None,
+        year_start: int | None = None,
+        year_end: int | None = None,
+        top: int = 1000,
+    ) -> list[dict[str, Any]]:
+        if self.get_indicator(indicator_code) is None:
+            raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
+        resolved = None
+        if countries:
+            resolved = [self.resolve_country(c) for c in countries]
+
+        where = ["o.indicator_code = ?"]
+        params: list[Any] = [indicator_code]
+        if resolved:
+            where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
+            params.extend(resolved)
+        if region:
+            where.append("lower(c.region) = lower(?)")
+            params.append(region)
+        if income:
+            where.append("lower(c.income) = lower(?)")
+            params.append(income)
+        if year_start is not None:
+            where.append("o.year >= ?")
+            params.append(int(year_start))
+        if year_end is not None:
+            where.append("o.year <= ?")
+            params.append(int(year_end))
+
+        rows = self._connect().execute(
+            f"""
+            select o.country_code, c.country_name, c.region, c.income,
+                   o.year, o.value
+            from observations o
+            join countries c on c.country_code = o.country_code
+            where {" and ".join(where)}
+            order by o.country_code, o.year
+            """,
+            params,
+        ).fetchall()
+        by_country: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            payload = _dict(row)
+            by_country.setdefault(payload["country_code"], []).append(payload)
+
+        out = []
+        for code, series in by_country.items():
+            first = series[0]
+            last = series[-1]
+            periods = int(last["year"]) - int(first["year"])
+            out.append({
+                "country_code": code,
+                "country_name": first["country_name"],
+                "region": first["region"],
+                "income": first["income"],
+                "first_year": first["year"],
+                "first_value": first["value"],
+                "latest_year": last["year"],
+                "latest_value": last["value"],
+                "year_count": len(series),
+                "absolute_change": float(last["value"]) - float(first["value"]),
+                "percent_change": _pct_change(first["value"], last["value"]),
+                "cagr": _cagr(first["value"], last["value"], periods),
+            })
+        out.sort(key=lambda row: row["absolute_change"], reverse=True)
+        return out[:top]
+
+    def quality_assessment(
+        self,
+        indicator_code: str,
+        *,
+        country: str | None = None,
+        countries: Iterable[str] | None = None,
+        region: str | None = None,
+        income: str | None = None,
+        year_start: int | None = None,
+        year_end: int | None = None,
+        top: int = 100,
+    ) -> dict[str, Any]:
+        if self.get_indicator(indicator_code) is None:
+            raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
+        requested = list(countries or [])
+        if country:
+            requested.append(country)
+        group_countries = self.countries(region=region, income=income)
+        if requested:
+            target_codes = [self.resolve_country(item) for item in requested]
+        elif region or income:
+            target_codes = [row["country_code"] for row in group_countries]
+        else:
+            target_codes = []
+
+        metadata_rows = self.country_metadata(
+            indicator_code=indicator_code,
+            top=100000,
+        )
+        if target_codes:
+            target_set = set(target_codes)
+            metadata_rows = [
+                row for row in metadata_rows if row["country_code"] in target_set
+            ]
+        data_types: dict[str, int] = {}
+        source_count = 0
+        estimation_notes = 0
+        footnotes = 0
+        comments = 0
+        for row in metadata_rows:
+            data_type = row.get("data_type") or "Unspecified"
+            data_types[data_type] = data_types.get(data_type, 0) + 1
+            source_count += 1 if row.get("sources") else 0
+            estimation_notes += 1 if row.get("methods_of_estimation") else 0
+            footnotes += 1 if row.get("country_footnote") else 0
+            comments += 1 if row.get("comments") else 0
+
+        availability = self.data_availability(
+            [indicator_code],
+            countries=target_codes or None,
+            region=region if not target_codes else None,
+            income=income if not target_codes else None,
+            year_start=year_start,
+            year_end=year_end,
+        )[0]
+        warnings = []
+        if availability["observation_count"] == 0:
+            warnings.append({
+                "type": "no_observations",
+                "message": "No observations matched the requested filters.",
+            })
+        if data_types and any("estimated" in k.lower() for k in data_types):
+            warnings.append({
+                "type": "estimated_data_present",
+                "message": "At least one metadata row is marked as estimated.",
+            })
+        if footnotes or comments:
+            warnings.append({
+                "type": "country_notes_present",
+                "message": "Country footnotes or comments are present; inspect rows before strong claims.",
+            })
+
+        return {
+            "indicator": self.get_indicator(indicator_code),
+            "country": country,
+            "countries": list(countries or []),
+            "region": region,
+            "income": income,
+            "year_start": year_start,
+            "year_end": year_end,
+            "availability": availability,
+            "metadata_summary": {
+                "metadata_rows": len(metadata_rows),
+                "data_types": data_types,
+                "rows_with_sources": source_count,
+                "rows_with_estimation_notes": estimation_notes,
+                "rows_with_country_footnotes": footnotes,
+                "rows_with_comments": comments,
+            },
+            "sample_metadata_rows": metadata_rows[:top],
+            "warnings": warnings,
+        }
+
     def additive_relationships(self, indicator_code: str) -> list[dict[str, Any]]:
         """Return known additive child relationships for a variable."""
         parent = self.get_indicator(indicator_code)
@@ -1079,6 +1346,92 @@ class GHEDStore:
                 "additivity": "sum(children) ~= parent when all variables are current-NCU amount series",
             })
         return relationships
+
+    def explain_relationship(self, indicator_code: str) -> dict[str, Any]:
+        indicator = self.get_indicator(indicator_code)
+        if indicator is None:
+            raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
+        unit = indicator.get("unit")
+        currency = indicator.get("currency")
+        long_code = indicator.get("long_code") or ""
+        method = indicator.get("measurement_method") or ""
+        is_amount = unit == "Millions" and currency == "NCU"
+        is_share = (
+            unit == "Percentage"
+            or "%" in str(long_code)
+            or "/" in str(method)
+            or "per" in str(unit or "").lower()
+        )
+        children = self.additive_relationships(indicator_code)
+        parent_candidates = []
+        for parent_code, relationships in ADDITIVE_RELATIONSHIPS.items():
+            for rel in relationships:
+                if indicator_code in rel.get("children", []):
+                    parent = self.get_indicator(parent_code) or {}
+                    parent_candidates.append({
+                        "parent_code": parent_code,
+                        "parent_name": parent.get("indicator_name"),
+                        "relationship_id": rel.get("relationship_id"),
+                        "relationship_description": rel.get("description"),
+                        "source": "curated_codebook_formula",
+                    })
+        if is_amount and str(long_code).startswith("sha11.") and "." in str(long_code):
+            parent_long_code = str(long_code).rsplit(".", 1)[0]
+            parent = self._connect().execute(
+                """
+                select indicator_code, indicator_name
+                from indicators
+                where long_code = ? and unit = 'Millions' and currency = 'NCU'
+                """,
+                (parent_long_code,),
+            ).fetchone()
+            if parent:
+                parent_candidates.append({
+                    "parent_code": parent["indicator_code"],
+                    "parent_name": parent["indicator_name"],
+                    "relationship_id": "sha_direct_children",
+                    "relationship_description": "Direct parent in the SHA 2011 long-code hierarchy.",
+                    "source": "inferred_from_sha11_long_codes",
+                })
+
+        if children:
+            role = "additive_parent"
+        elif parent_candidates:
+            role = "component"
+        elif is_share:
+            role = "derived_ratio_or_share"
+        elif is_amount:
+            role = "amount_series"
+        else:
+            role = "context_or_conversion_series"
+
+        cautions = []
+        if is_share:
+            cautions.append(
+                "Do not sum this variable across components as an accounting identity."
+            )
+        if is_amount:
+            cautions.append(
+                "Amount series can be additive only when parent/child units, currency, prices, and classification dimensions match."
+            )
+        if children:
+            cautions.append(
+                "Use additive_hierarchy or build_additive_breakdown to validate any decomposition for a country-year."
+            )
+        if not children and not parent_candidates and not is_share:
+            cautions.append(
+                "No curated or inferred additive hierarchy is currently known for this variable."
+            )
+
+        return {
+            "indicator": indicator,
+            "role": role,
+            "is_amount_current_ncu": is_amount,
+            "is_ratio_share_or_per_capita": is_share,
+            "additive_children": children,
+            "known_parents": parent_candidates,
+            "interpretation_cautions": cautions,
+        }
 
     def _sha_direct_children(self, indicator_code: str) -> list[dict[str, Any]]:
         parent = self.get_indicator(indicator_code)
@@ -1220,6 +1573,21 @@ def rows_to_csv(rows: list[dict[str, Any]]) -> str:
         "unit",
         "currency",
     ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
+def dicts_to_csv(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    fields: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fields:
+                fields.append(key)
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()

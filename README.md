@@ -42,11 +42,18 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `get_country_metadata` | Source and estimation notes for one country/indicator |
 | `data_availability` | Availability summary for one or more variables before panel construction |
 | `additive_hierarchy` | Known additive parent-child relationships for a variable |
+| `explain_indicator_relationship` | Classify a variable as total, component, ratio/share, amount, or context series |
 | `build_additive_breakdown` | Country-year breakdown with child sum, shares, and balance check |
 | `build_research_panel` | Tidy long panel for multiple variables, countries, and years |
+| `build_research_package` | Export-ready data CSV, codebook CSV, availability CSV, and README text |
 | `get_indicator_data` | One indicator with optional country and year filters |
 | `compare_countries` | One indicator across countries, returned as tidy rows or CSV |
 | `compare_country_group` | One indicator across countries matching a region and/or income group |
+| `summarize_country_group` | Group stats, coverage, top/bottom countries, and mixed-year warnings |
+| `indicator_trend` | First/latest country trends for one indicator |
+| `compare_trends` | First/latest country trends for multiple indicators |
+| `rank_country_changes` | Rank countries by absolute change, percent change, or CAGR |
+| `assess_data_quality` | Availability, metadata completeness, data-type mix, and caution flags |
 | `country_profile` | Latest headline health expenditure values for one country |
 
 ## Data Source
@@ -92,6 +99,57 @@ Research-facing helpers are based on common GHED use patterns in the literature:
 - primary health care expenditure
 
 The MCP also exposes additive accounting relationships. For example, `hf` decomposes into `hf1`, `hf2`, `hf3`, `hf4`, and `hfnec`; `gghed` decomposes into `fs1 + fs3`; and SHA long-code trees such as `sha11.HC` or `sha11.HP` expose direct children. These relationships are intended for current-NCU amount variables only.
+
+## Example Workflows
+
+Compare a few countries:
+
+```text
+compare_countries(indicator_code="che_gdp", countries=["Colombia", "Peru", "Mexico"], latest_only=True)
+```
+
+Summarize an income group:
+
+```text
+summarize_country_group(indicator_code="oops_che", income="Upper-middle")
+```
+
+Build a researcher-ready panel package:
+
+```text
+build_research_package(
+  indicator_codes=["che_gdp", "gghed_gge", "oops_che"],
+  income="Upper-middle",
+  year_start=2000,
+  year_end=2024
+)
+```
+
+Explain a decomposition before summing:
+
+```text
+explain_indicator_relationship(indicator_code="gghed")
+build_additive_breakdown(indicator_code="gghed", country="Colombia", year=2023)
+```
+
+Rank country changes:
+
+```text
+rank_country_changes(
+  indicator_code="oops_che",
+  region="AMR",
+  year_start=2000,
+  year_end=2024,
+  metric="absolute_change",
+  descending=False
+)
+```
+
+Check data quality before interpretation:
+
+```text
+assess_data_quality(indicator_code="phc_che", income="Lower-middle", year_start=2016)
+```
 
 ## Development
 

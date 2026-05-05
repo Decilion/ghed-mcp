@@ -334,31 +334,55 @@ RESEARCH_USE_CASES: dict[str, dict[str, Any]] = {
 _USE_CASE_KEYWORDS: dict[str, set[str]] = {
     "health_financing_transition": {
         "transition", "financing mix", "composition", "economic development",
-        "income", "prepaid", "mix", "sources",
+        "income", "prepaid", "mix", "sources", "resource mobilization",
+        "health financing", "financing transition", "spending transition",
     },
     "financial_protection_oop": {
         "oop", "out-of-pocket", "out of pocket", "financial protection",
-        "catastrophic", "impoverishing", "household",
+        "catastrophic", "impoverishing", "household", "direct payment",
+        "user fee", "copayment", "co-payment", "financial hardship",
     },
     "government_priority": {
         "government", "public", "fiscal", "priority", "budget", "gghe",
-        "gghed", "domestic general government",
+        "gghed", "domestic general government", "public spending",
+        "public expenditure", "fiscal space", "government budget",
+        "general government expenditure",
     },
     "donor_dependence": {
         "external", "donor", "aid", "development assistance", "dah",
-        "foreign",
+        "foreign", "oda", "donor dependence", "external resources",
+        "aid dependence",
     },
     "private_and_voluntary_insurance": {
         "private", "voluntary", "insurance", "vhi", "prepayment",
-        "compulsory private",
+        "compulsory private", "private insurance", "voluntary health insurance",
+        "prepaid private",
     },
     "services_providers_sha": {
         "function", "provider", "service", "disease", "condition", "scheme",
         "revenue", "sha", "classification", "inpatient", "outpatient",
+        "hospital", "ambulatory", "breakdown", "decomposition", "hierarchy",
     },
     "primary_health_care": {
-        "primary health care", "phc", "primary care",
+        "primary health care", "phc", "primary care", "first contact",
+        "basic care",
     },
+}
+
+_INDICATOR_ALIASES: dict[str, list[str]] = {
+    "che_gdp": ["health spending share of GDP", "health expenditure percent GDP"],
+    "che_pc_usd": ["health spending per capita", "current health expenditure per capita"],
+    "che_ppp_pc": ["PPP health spending per capita", "comparable per capita health spending"],
+    "gghed_gge": ["fiscal priority", "health share of government budget"],
+    "gghed_gdp": ["public health spending share of GDP"],
+    "gghed_che": ["government share of health spending", "public share of health spending"],
+    "oops_che": ["out-of-pocket burden", "OOP share", "household payment share"],
+    "oops_pc_usd": ["OOP per capita", "out-of-pocket spending per person"],
+    "ext_che": ["donor dependence", "external share of health spending"],
+    "ext_gdp": ["external health funding share of GDP"],
+    "pvtd_che": ["private domestic share of health spending"],
+    "vpp_che": ["voluntary prepaid share", "voluntary prepayment"],
+    "phc_che": ["primary health care share", "PHC share of CHE"],
 }
 
 
@@ -391,9 +415,18 @@ def suggest_use_cases(question: str) -> dict[str, Any]:
                 "typical_questions": [],
                 "cautions": [],
             })
+    matched_aliases = []
+    for code, aliases in _INDICATOR_ALIASES.items():
+        hits = [alias for alias in aliases if alias.lower() in q]
+        if hits:
+            matched_aliases.append({
+                "indicator_code": code,
+                "matched_aliases": hits,
+            })
     return {
         "question": question,
         "suggestions": suggestions,
+        "matched_indicator_aliases": matched_aliases,
         "general_cautions": METHODOLOGY_SUMMARY["analysis_cautions"],
     }
 

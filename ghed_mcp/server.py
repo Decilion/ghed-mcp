@@ -23,7 +23,7 @@ from .methodology import (
     suggest_use_cases,
     topic_index,
 )
-from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, rows_to_csv
+from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, dicts_to_csv, rows_to_csv
 
 # FastMCP builds each tool's argument model with this base. Forbid unknown
 # keyword arguments so misspelled filters fail instead of being ignored.
@@ -353,6 +353,13 @@ async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def explain_indicator_relationship(indicator_code: str) -> dict[str, Any]:
+    """Explain whether a variable is a total, component, ratio/share, or context series."""
+    store = await get_store()
+    return store.explain_relationship(indicator_code)
+
+
+@mcp.tool()
 async def build_additive_breakdown(
     indicator_code: str,
     country: str,
@@ -422,6 +429,98 @@ async def build_research_panel(
     else:
         result["rows"] = rows
     return result
+
+
+@mcp.tool()
+async def build_research_package(
+    indicator_codes: list[str],
+    countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    top: int = 100000,
+) -> dict[str, Any]:
+    """Build export-ready CSV data, codebook, and README text for a research extract."""
+    if not indicator_codes:
+        raise ValueError("indicator_codes must be a non-empty list.")
+    top = max(1, min(top, 200000))
+    store = await get_store()
+    rows = store.research_panel(
+        indicator_codes,
+        countries=countries,
+        region=region,
+        income=income,
+        year_start=year_start,
+        year_end=year_end,
+        top=top,
+    )
+    codebook = [
+        store.get_indicator(indicator_code) or {"indicator_code": indicator_code}
+        for indicator_code in indicator_codes
+    ]
+    availability = store.data_availability(
+        indicator_codes,
+        countries=countries,
+        region=region,
+        income=income,
+        year_start=year_start,
+        year_end=year_end,
+    )
+    source = provenance(
+        workbook=store.path,
+        operation="build_research_package",
+        params={
+            "indicator_codes": indicator_codes,
+            "countries": countries,
+            "region": region,
+            "income": income,
+            "year_start": year_start,
+            "year_end": year_end,
+            "top": top,
+        },
+    )
+    warnings = []
+    if len(rows) >= top:
+        warnings.append({
+            "type": "top_limit_reached",
+            "message": "The data extract reached the top limit; increase top or narrow filters.",
+            "top": top,
+        })
+    readme = "\n".join([
+        "# GHED Research Extract",
+        "",
+        f"Indicators: {', '.join(indicator_codes)}",
+        f"Countries: {', '.join(countries or []) if countries else 'Filtered by region/income or all countries'}",
+        f"Region: {region or 'Any'}",
+        f"Income: {income or 'Any'}",
+        f"Years: {year_start or 'earliest'} to {year_end or 'latest'}",
+        f"Rows: {len(rows)}",
+        "",
+        "Source: WHO Global Health Expenditure Database all-data workbook.",
+        f"Workbook path: {source['workbook_path']}",
+        "",
+        "Cautions:",
+        "- Latest data may differ by country and variable.",
+        "- Inspect codebook.csv for units and measurement methods before combining variables.",
+        "- Do not sum percentages, per-capita values, USD/PPP values, or constant-price series as accounting identities.",
+    ])
+    return {
+        "source": source,
+        "indicator_codes": indicator_codes,
+        "countries": countries,
+        "region": region,
+        "income": income,
+        "year_start": year_start,
+        "year_end": year_end,
+        "count": len(rows),
+        "possibly_truncated": len(rows) >= top,
+        "warnings": warnings,
+        "data_csv": rows_to_csv(rows),
+        "codebook_csv": dicts_to_csv(codebook),
+        "availability_csv": dicts_to_csv(availability),
+        "readme": readme,
+    }
 
 
 @mcp.tool()
@@ -616,6 +715,213 @@ async def compare_country_group(
         result["csv"] = rows_to_csv(rows)
     else:
         result["rows"] = rows
+    return result
+
+
+@mcp.tool()
+async def summarize_country_group(
+    indicator_code: str,
+    region: str | None = None,
+    income: str | None = None,
+    year: int | None = None,
+    latest_only: bool = True,
+    top_n: int = 5,
+) -> dict[str, Any]:
+    """Summarize an indicator within a GHED region/income group."""
+    top_n = max(1, min(top_n, 25))
+    store = await get_store()
+    result = store.group_summary(
+        indicator_code,
+        region=region,
+        income=income,
+        year=year,
+        latest_only=latest_only,
+        top_n=top_n,
+    )
+    result["source"] = provenance(
+        workbook=store.path,
+        operation="summarize_country_group",
+        params={
+            "indicator_code": indicator_code,
+            "region": region,
+            "income": income,
+            "year": year,
+            "latest_only": latest_only,
+            "top_n": top_n,
+        },
+    )
+    return result
+
+
+@mcp.tool()
+async def indicator_trend(
+    indicator_code: str,
+    countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    top: int = 1000,
+) -> dict[str, Any]:
+    """Compute country-level first/latest trends for one GHED indicator."""
+    top = max(1, min(top, 5000))
+    store = await get_store()
+    rows = store.indicator_trends(
+        indicator_code,
+        countries=countries,
+        region=region,
+        income=income,
+        year_start=year_start,
+        year_end=year_end,
+        top=top,
+    )
+    return {
+        "indicator_code": indicator_code,
+        "countries": countries,
+        "region": region,
+        "income": income,
+        "year_start": year_start,
+        "year_end": year_end,
+        "count": len(rows),
+        "rows": rows,
+        "source": provenance(
+            workbook=store.path,
+            operation="indicator_trend",
+            params={
+                "indicator_code": indicator_code,
+                "countries": countries,
+                "region": region,
+                "income": income,
+                "year_start": year_start,
+                "year_end": year_end,
+                "top": top,
+            },
+        ),
+    }
+
+
+@mcp.tool()
+async def compare_trends(
+    indicator_codes: list[str],
+    countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    top_per_indicator: int = 1000,
+) -> dict[str, Any]:
+    """Compute first/latest trend summaries for multiple GHED indicators."""
+    if not indicator_codes:
+        raise ValueError("indicator_codes must be a non-empty list.")
+    top_per_indicator = max(1, min(top_per_indicator, 5000))
+    store = await get_store()
+    items = []
+    for indicator_code in indicator_codes:
+        rows = store.indicator_trends(
+            indicator_code,
+            countries=countries,
+            region=region,
+            income=income,
+            year_start=year_start,
+            year_end=year_end,
+            top=top_per_indicator,
+        )
+        items.append({
+            "indicator_code": indicator_code,
+            "metadata": store.get_indicator(indicator_code),
+            "count": len(rows),
+            "rows": rows,
+        })
+    return {
+        "indicator_codes": indicator_codes,
+        "countries": countries,
+        "region": region,
+        "income": income,
+        "year_start": year_start,
+        "year_end": year_end,
+        "items": items,
+    }
+
+
+@mcp.tool()
+async def rank_country_changes(
+    indicator_code: str,
+    countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    metric: str = "absolute_change",
+    descending: bool = True,
+    top: int = 20,
+) -> dict[str, Any]:
+    """Rank countries by change in one indicator over the requested period."""
+    if metric not in ("absolute_change", "percent_change", "cagr"):
+        raise ValueError("metric must be one of absolute_change, percent_change, or cagr.")
+    top = max(1, min(top, 200))
+    store = await get_store()
+    rows = store.indicator_trends(
+        indicator_code,
+        countries=countries,
+        region=region,
+        income=income,
+        year_start=year_start,
+        year_end=year_end,
+        top=5000,
+    )
+    rows_with_metric = [row for row in rows if row.get(metric) is not None]
+    ranked = sorted(
+        rows_with_metric,
+        key=lambda row: row[metric],
+        reverse=descending,
+    )[:top]
+    return {
+        "indicator_code": indicator_code,
+        "metric": metric,
+        "descending": descending,
+        "count": len(ranked),
+        "rows": ranked,
+    }
+
+
+@mcp.tool()
+async def assess_data_quality(
+    indicator_code: str,
+    country: str | None = None,
+    countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    top: int = 20,
+) -> dict[str, Any]:
+    """Summarize metadata, availability, and cautions for an indicator/filter."""
+    top = max(1, min(top, 100))
+    store = await get_store()
+    result = store.quality_assessment(
+        indicator_code,
+        country=country,
+        countries=countries,
+        region=region,
+        income=income,
+        year_start=year_start,
+        year_end=year_end,
+        top=top,
+    )
+    result["source"] = provenance(
+        workbook=store.path,
+        operation="assess_data_quality",
+        params={
+            "indicator_code": indicator_code,
+            "country": country,
+            "countries": countries,
+            "region": region,
+            "income": income,
+            "year_start": year_start,
+            "year_end": year_end,
+            "top": top,
+        },
+    )
     return result
 
 
