@@ -300,6 +300,40 @@ async def data_availability(
 
 
 @mcp.tool()
+async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
+    """Return known additive child relationships for a GHED variable."""
+    store = await get_store()
+    relationships = store.additive_relationships(indicator_code)
+    return {
+        "indicator_code": indicator_code,
+        "count": len(relationships),
+        "relationships": relationships,
+        "caution": (
+            "Use these relationships for current-NCU amount variables. Do not sum "
+            "percentages, per-capita values, USD/PPP values, or constant-price "
+            "variants as accounting identities."
+        ),
+    }
+
+
+@mcp.tool()
+async def build_additive_breakdown(
+    indicator_code: str,
+    country: str,
+    year: int,
+    relationship_id: str | None = None,
+) -> dict[str, Any]:
+    """Build and validate an additive breakdown for one country-year."""
+    store = await get_store()
+    return store.breakdown(
+        indicator_code,
+        country=country,
+        year=year,
+        relationship_id=relationship_id,
+    )
+
+
+@mcp.tool()
 async def build_research_panel(
     indicator_codes: list[str],
     countries: list[str] | None = None,

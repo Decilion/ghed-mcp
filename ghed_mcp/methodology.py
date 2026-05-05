@@ -144,6 +144,47 @@ TOPICS: dict[str, dict[str, Any]] = {
     },
 }
 
+ADDITIVE_RELATIONSHIPS: dict[str, list[dict[str, Any]]] = {
+    "che": [
+        {
+            "relationship_id": "che_by_financing_scheme",
+            "description": "CHE decomposed by SHA financing schemes.",
+            "children": ["hf1", "hf2", "hf3", "hf4", "hfnec"],
+            "basis": "Codebook measurement method for CHE; equivalent to sha11.HF direct children.",
+        },
+        {
+            "relationship_id": "che_by_domestic_external_source",
+            "description": "CHE decomposed into domestic government, domestic private, and external health expenditure.",
+            "children": ["gghed", "pvtd", "ext"],
+            "basis": "Derived from FS source groupings: GGHE-D + PVT-D + EXT.",
+        },
+    ],
+    "gghed": [
+        {
+            "relationship_id": "gghed_by_revenue",
+            "description": "Domestic general government health expenditure by revenue components.",
+            "children": ["fs1", "fs3"],
+            "basis": "Codebook measurement method: FS.1 + FS.3.",
+        }
+    ],
+    "pvtd": [
+        {
+            "relationship_id": "pvtd_by_revenue",
+            "description": "Domestic private health expenditure by revenue components.",
+            "children": ["fs4", "fs5", "fs6", "fsnec"],
+            "basis": "Codebook measurement method: FS.4 + FS.5 + FS.6 + FS.nec.",
+        }
+    ],
+    "ext": [
+        {
+            "relationship_id": "ext_by_revenue",
+            "description": "External health expenditure by revenue components.",
+            "children": ["fs2", "fs7"],
+            "basis": "Codebook measurement method: FS.2 + FS.7.",
+        }
+    ],
+}
+
 RESEARCH_USE_CASES: dict[str, dict[str, Any]] = {
     "health_financing_transition": {
         "description": (
@@ -363,6 +404,7 @@ def methodology_summary() -> dict[str, Any]:
         "category_guide": CATEGORY_GUIDE,
         "topics": TOPICS,
         "research_use_cases": RESEARCH_USE_CASES,
+        "additive_relationships": ADDITIVE_RELATIONSHIPS,
     }
 
 

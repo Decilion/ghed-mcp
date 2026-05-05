@@ -22,3 +22,4 @@
 - Added methodology awareness: `methodology_guide`, `topics_index`, `list_variable_categories`, `list_variables`, and `search_variables`.
 - Changed `list_indicators` / `search_indicators` semantics to focus on headline `category_1 = INDICATORS`; full-codebook access now uses variable tools.
 - Added literature-inspired research workflows: `research_use_cases`, `suggest_variables_for_research_question`, `data_availability`, and `build_research_panel`.
+- Added additive hierarchy support: curated codebook formulas for CHE/GGHE-D/PVT-D/EXT and inferred SHA direct-child trees for current-NCU amount variables. Exposed through `additive_hierarchy` and `build_additive_breakdown`.

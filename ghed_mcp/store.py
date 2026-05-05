@@ -12,6 +12,8 @@ from typing import Any, Iterable
 
 from openpyxl import load_workbook
 
+from .methodology import ADDITIVE_RELATIONSHIPS
+
 CORE_COLUMNS = {"location", "code", "region", "income", "year"}
 DEFAULT_PROFILE_INDICATORS = [
     "che_gdp",
@@ -907,6 +909,164 @@ class GHEDStore:
         params.append(top)
         rows = self._connect().execute(sql, params).fetchall()
         return [_dict(row) for row in rows]
+
+    def additive_relationships(self, indicator_code: str) -> list[dict[str, Any]]:
+        """Return known additive child relationships for a variable."""
+        parent = self.get_indicator(indicator_code)
+        if parent is None:
+            raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
+
+        relationships = []
+        for rel in ADDITIVE_RELATIONSHIPS.get(indicator_code, []):
+            relationships.append({
+                **rel,
+                "parent_code": indicator_code,
+                "parent_name": parent.get("indicator_name"),
+                "children_metadata": [
+                    self.get_indicator(code) for code in rel["children"]
+                ],
+                "source": "curated_codebook_formula",
+                "additivity": "sum(children) ~= parent for amount variables",
+            })
+
+        dynamic_children = self._sha_direct_children(indicator_code)
+        if dynamic_children:
+            relationships.append({
+                "relationship_id": "sha_direct_children",
+                "description": "Direct children in the SHA 2011 long-code hierarchy.",
+                "parent_code": indicator_code,
+                "parent_name": parent.get("indicator_name"),
+                "children": [row["indicator_code"] for row in dynamic_children],
+                "children_metadata": dynamic_children,
+                "basis": "Direct child long codes under the parent's sha11.* long code.",
+                "source": "inferred_from_sha11_long_codes",
+                "additivity": "sum(children) ~= parent when all variables are current-NCU amount series",
+            })
+        return relationships
+
+    def _sha_direct_children(self, indicator_code: str) -> list[dict[str, Any]]:
+        parent = self.get_indicator(indicator_code)
+        if not parent or parent.get("unit") != "Millions" or parent.get("currency") != "NCU":
+            return []
+        long_code = parent.get("long_code")
+        if not long_code or not str(long_code).startswith("sha11."):
+            return []
+
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            select indicator_code, indicator_name, long_code, category_1,
+                   category_2, unit, currency, measurement_method
+            from indicators
+            where unit = 'Millions'
+              and currency = 'NCU'
+              and long_code like ?
+            order by long_code
+            """,
+            (f"{long_code}.%",),
+        ).fetchall()
+        direct = []
+        for row in rows:
+            child = _dict(row)
+            if self._is_direct_sha_child(str(long_code), str(child["long_code"])):
+                direct.append(child)
+        return direct
+
+    def _is_direct_sha_child(self, parent_long_code: str, child_long_code: str) -> bool:
+        if not child_long_code.startswith(parent_long_code + "."):
+            return False
+        rest = child_long_code[len(parent_long_code) + 1:]
+        if "_" in rest:
+            return False
+        return "." not in rest
+
+    def breakdown(
+        self,
+        parent_code: str,
+        *,
+        country: str,
+        year: int,
+        relationship_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Build and validate an additive breakdown for a country-year."""
+        relationships = self.additive_relationships(parent_code)
+        if relationship_id:
+            relationships = [
+                rel for rel in relationships
+                if rel["relationship_id"] == relationship_id
+            ]
+            if not relationships:
+                raise ValueError(
+                    f"No relationship '{relationship_id}' found for '{parent_code}'."
+                )
+        if not relationships:
+            raise ValueError(f"No additive hierarchy known for '{parent_code}'.")
+        rel = relationships[0]
+
+        resolved_country = self.resolve_country(country)
+        parent_rows = self.indicator_data(
+            parent_code,
+            countries=[resolved_country],
+            year_start=year,
+            year_end=year,
+            top=1,
+        )
+        parent_value = parent_rows[0]["value"] if parent_rows else None
+        children = []
+        child_sum = 0.0
+        for child_code in rel["children"]:
+            rows = self.indicator_data(
+                child_code,
+                countries=[resolved_country],
+                year_start=year,
+                year_end=year,
+                top=1,
+            )
+            row = rows[0] if rows else None
+            value = row["value"] if row else None
+            if value is not None:
+                child_sum += float(value)
+            children.append({
+                "indicator_code": child_code,
+                "indicator_name": (
+                    (row or self.get_indicator(child_code) or {}).get("indicator_name")
+                ),
+                "value": value,
+                "share_of_parent": (
+                    None if value is None or not parent_value
+                    else float(value) / float(parent_value)
+                ),
+            })
+
+        difference = None if parent_value is None else child_sum - float(parent_value)
+        relative_difference = (
+            None if parent_value in (None, 0)
+            else difference / float(parent_value)
+        )
+        return {
+            "relationship": rel,
+            "country_code": resolved_country,
+            "country": self.country_map()[resolved_country]["country_name"],
+            "year": year,
+            "parent": {
+                "indicator_code": parent_code,
+                "indicator_name": (self.get_indicator(parent_code) or {}).get("indicator_name"),
+                "value": parent_value,
+            },
+            "children": children,
+            "child_sum": child_sum,
+            "difference": difference,
+            "relative_difference": relative_difference,
+            "balanced": (
+                False if relative_difference is None
+                else abs(relative_difference) < 1e-6
+            ),
+            "caution": (
+                "Only current-NCU amount variables are additive. Percentages, per-capita "
+                "series, USD/PPP conversions, and constant-price variants should not be "
+                "summed as accounting identities."
+            ),
+        }
 
 
 def rows_to_csv(rows: list[dict[str, Any]]) -> str:

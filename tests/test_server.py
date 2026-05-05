@@ -20,10 +20,22 @@ def sample_workbook(tmp_path: Path) -> Path:
 
     ws = wb.active
     ws.title = "Data"
-    ws.append(["location", "code", "region", "income", "year", "che_gdp", "oops_che"])
-    ws.append(["Colombia", "COL", "AMR", "Upper-middle", 2022, 8.1, 14.0])
-    ws.append(["Colombia", "COL", "AMR", "Upper-middle", 2023, 8.3, 13.8])
-    ws.append(["Peru", "PER", "AMR", "Upper-middle", 2022, 5.5, 28.0])
+    ws.append([
+        "location", "code", "region", "income", "year",
+        "che_gdp", "oops_che", "che", "gghed", "fs1", "fs3", "hc", "hc1", "hc2",
+    ])
+    ws.append([
+        "Colombia", "COL", "AMR", "Upper-middle", 2022,
+        8.1, 14.0, 100.0, 70.0, 60.0, 10.0, 100.0, 55.0, 45.0,
+    ])
+    ws.append([
+        "Colombia", "COL", "AMR", "Upper-middle", 2023,
+        8.3, 13.8, 110.0, 80.0, 65.0, 15.0, 110.0, 60.0, 50.0,
+    ])
+    ws.append([
+        "Peru", "PER", "AMR", "Upper-middle", 2022,
+        5.5, 28.0, 90.0, 50.0, 45.0, 5.0, 90.0, 40.0, 50.0,
+    ])
 
     ws = wb.create_sheet("Codebook")
     ws.append([
@@ -65,6 +77,76 @@ def sample_workbook(tmp_path: Path) -> Path:
         "HEALTH CARE FUNCTIONS",
         "National Currency Unit (NCU) millions",
         "-",
+        "-",
+    ])
+    ws.append([
+        "che",
+        "Current Health Expenditure (CHE), in million current NCU",
+        "CHE",
+        "INDICATORS",
+        "AGGREGATES",
+        "Millions",
+        "NCU",
+        "HF.1 + HF.2 + HF.3 + HF.4 + HF.nec",
+    ])
+    ws.append([
+        "gghed",
+        "Domestic General Government Health Expenditure (GGHE-D), in million current NCU",
+        "GGHE-D",
+        "INDICATORS",
+        "AGGREGATES",
+        "Millions",
+        "NCU",
+        "FS.1 + FS.3",
+    ])
+    ws.append([
+        "fs1",
+        "Transfers from government domestic revenue",
+        "sha11.FS.1",
+        "HEALTH EXPENDITURE DATA",
+        "REVENUES",
+        "Millions",
+        "NCU",
+        "-",
+    ])
+    ws.append([
+        "fs3",
+        "Social insurance contributions",
+        "sha11.FS.3",
+        "HEALTH EXPENDITURE DATA",
+        "REVENUES",
+        "Millions",
+        "NCU",
+        "-",
+    ])
+    ws.append([
+        "hc",
+        "Current health expenditure by Health Care Functions",
+        "sha11.HC",
+        "HEALTH EXPENDITURE DATA",
+        "HEALTH CARE FUNCTIONS",
+        "Millions",
+        "NCU",
+        "-",
+    ])
+    ws.append([
+        "hc1",
+        "Curative care",
+        "sha11.HC.1",
+        "HEALTH EXPENDITURE DATA",
+        "HEALTH CARE FUNCTIONS",
+        "Millions",
+        "NCU",
+        "-",
+    ])
+    ws.append([
+        "hc2",
+        "Rehabilitative care",
+        "sha11.HC.2",
+        "HEALTH EXPENDITURE DATA",
+        "HEALTH CARE FUNCTIONS",
+        "Millions",
+        "NCU",
         "-",
     ])
 
@@ -124,9 +206,11 @@ async def test_search_indicators():
 async def test_list_indicators_is_headline_only():
     result = await server.list_indicators()
 
-    assert result["total"] == 2
+    assert result["total"] == 4
     assert {row["indicator_code"] for row in result["items"]} == {
         "che_gdp",
+        "che",
+        "gghed",
         "oops_che",
     }
 
@@ -134,8 +218,8 @@ async def test_list_indicators_is_headline_only():
 async def test_list_variables_includes_detailed_series():
     result = await server.list_variables(category_1="HEALTH EXPENDITURE DATA")
 
-    assert result["total"] == 1
-    assert result["items"][0]["indicator_code"] == "hc11"
+    assert result["total"] == 6
+    assert "hc11" in {row["indicator_code"] for row in result["items"]}
 
 
 async def test_methodology_guide_has_variable_classes():
@@ -224,8 +308,32 @@ async def test_cache_status_reports_sqlite_counts():
 
     assert result["cache"]["sqlite_current"] is True
     assert result["cache"]["counts"]["countries"] == 2
-    assert result["cache"]["counts"]["indicators"] == 3
-    assert result["cache"]["counts"]["observations"] == 6
+    assert result["cache"]["counts"]["indicators"] == 10
+    assert result["cache"]["counts"]["observations"] == 27
+
+
+async def test_additive_hierarchy_formula_and_sha_children():
+    formula = await server.additive_hierarchy("gghed")
+    assert formula["relationships"][0]["children"] == ["fs1", "fs3"]
+
+    sha = await server.additive_hierarchy("hc")
+    rel = {
+        item["relationship_id"]: item for item in sha["relationships"]
+    }["sha_direct_children"]
+    assert rel["children"] == ["hc1", "hc2"]
+
+
+async def test_build_additive_breakdown_balances():
+    result = await server.build_additive_breakdown(
+        "gghed",
+        country="Colombia",
+        year=2023,
+    )
+
+    assert result["parent"]["value"] == 80.0
+    assert result["child_sum"] == 80.0
+    assert result["balanced"] is True
+    assert [row["indicator_code"] for row in result["children"]] == ["fs1", "fs3"]
 
 
 def test_find_latest_all_data_document_uses_documentation_tree():

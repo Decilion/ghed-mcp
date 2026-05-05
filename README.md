@@ -40,6 +40,8 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `get_indicator_metadata` | Codebook metadata for one variable |
 | `get_country_metadata` | Source and estimation notes for one country/indicator |
 | `data_availability` | Availability summary for one or more variables before panel construction |
+| `additive_hierarchy` | Known additive parent-child relationships for a variable |
+| `build_additive_breakdown` | Country-year breakdown with child sum, shares, and balance check |
 | `build_research_panel` | Tidy long panel for multiple variables, countries, and years |
 | `get_indicator_data` | One indicator with optional country and year filters |
 | `compare_countries` | One indicator across countries, returned as tidy rows or CSV |
@@ -84,6 +86,8 @@ Research-facing helpers are based on common GHED use patterns in the literature:
 - voluntary/private insurance
 - detailed SHA services/providers/functions
 - primary health care expenditure
+
+The MCP also exposes additive accounting relationships. For example, `hf` decomposes into `hf1`, `hf2`, `hf3`, `hf4`, and `hfnec`; `gghed` decomposes into `fs1 + fs3`; and SHA long-code trees such as `sha11.HC` or `sha11.HP` expose direct children. These relationships are intended for current-NCU amount variables only.
 
 ## Development
 
