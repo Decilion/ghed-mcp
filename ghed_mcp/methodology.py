@@ -144,12 +144,225 @@ TOPICS: dict[str, dict[str, Any]] = {
     },
 }
 
+RESEARCH_USE_CASES: dict[str, dict[str, Any]] = {
+    "health_financing_transition": {
+        "description": (
+            "Study how the level and composition of health spending changes with "
+            "income, time, or reform: government, OOP, prepaid private, and external."
+        ),
+        "recommended_codes": [
+            "che_pc_usd",
+            "che_gdp",
+            "gghed_che",
+            "oops_che",
+            "vpp_che",
+            "ext_che",
+        ],
+        "typical_questions": [
+            "How did the financing mix change from 2000 to 2024?",
+            "Which countries rely more on OOP or external funding than peers?",
+            "Did government spending rise as countries became richer?",
+        ],
+        "cautions": [
+            "Latest values may differ by country and variable.",
+            "Use constant or PPP per-capita series for cross-country level comparisons.",
+        ],
+    },
+    "financial_protection_oop": {
+        "description": (
+            "Use OOP indicators as macro health-financing context for UHC and "
+            "financial protection research."
+        ),
+        "recommended_codes": [
+            "oops_che",
+            "oops_pc_usd",
+            "oops_ppp_pc",
+            "oop_pc_usd",
+        ],
+        "typical_questions": [
+            "Which countries have persistently high OOP shares?",
+            "Did OOP decline after government spending increased?",
+            "How does OOP spending compare with catastrophic expenditure survey results?",
+        ],
+        "cautions": [
+            "GHED OOP is national accounts spending, not household catastrophic expenditure.",
+            "Pair with household survey or SDG 3.8.2 data for direct financial-protection outcomes.",
+        ],
+    },
+    "government_priority": {
+        "description": (
+            "Analyze government health spending effort and priority in the public budget."
+        ),
+        "recommended_codes": [
+            "gghed",
+            "gghed_che",
+            "gghed_gdp",
+            "gghed_gge",
+            "gghed_pc_usd",
+            "gghed_ppp_pc",
+        ],
+        "typical_questions": [
+            "What share of total health spending is government funded?",
+            "How much fiscal priority does health receive in the government budget?",
+            "Did government health spending grow faster than GDP or general government expenditure?",
+        ],
+        "cautions": [
+            "GGHE-D includes domestic general government sources; inspect metadata for estimated/documented status.",
+            "Do not confuse share of CHE with share of GDP or share of GGE.",
+        ],
+    },
+    "donor_dependence": {
+        "description": "Assess external funding dependence and its change over time.",
+        "recommended_codes": [
+            "ext",
+            "ext_che",
+            "ext_gdp",
+            "ext_pc_usd",
+            "ext_ppp_pc",
+        ],
+        "typical_questions": [
+            "Which countries are most dependent on external health funding?",
+            "Has external funding declined after income growth?",
+            "How volatile is external funding over time?",
+        ],
+        "cautions": [
+            "External current health expenditure can exclude capital aid depending on reporting.",
+            "Inspect sources/methods for donor-heavy countries.",
+        ],
+    },
+    "private_and_voluntary_insurance": {
+        "description": "Study private, voluntary, and prepaid financing arrangements.",
+        "recommended_codes": [
+            "pvtd_che",
+            "vpp_che",
+            "vhi_che",
+            "chi_pvt_che",
+        ],
+        "typical_questions": [
+            "Is voluntary insurance growing in LMICs?",
+            "Does private prepayment substitute for OOP spending?",
+            "Which countries have non-trivial voluntary/private insurance shares?",
+        ],
+        "cautions": [
+            "Voluntary health insurance can be sparse and difficult to compare.",
+            "Interpret insurance roles with country policy context.",
+        ],
+    },
+    "services_providers_sha": {
+        "description": (
+            "Use detailed SHA series for spending by health care function, provider, "
+            "financing scheme, source, disease/condition, or cross-tab."
+        ),
+        "recommended_categories": [
+            "HEALTH CARE FUNCTIONS",
+            "HEALTH CARE PROVIDERS",
+            "FINANCING SCHEMES",
+            "HEALTH CARE FUNCTIONS BY SOURCE",
+            "DISEASES AND CONDITIONS",
+            "DISEASES AND CONDITIONS BY SOURCE",
+        ],
+        "typical_questions": [
+            "How much is spent on inpatient versus outpatient care?",
+            "Which provider types account for spending?",
+            "How are functions funded by public, private, or external sources?",
+        ],
+        "cautions": [
+            "Detailed SHA categories are less complete than headline indicators.",
+            "Run data availability checks before cross-country comparisons.",
+        ],
+    },
+    "primary_health_care": {
+        "description": "Analyze PHC spending levels and shares.",
+        "recommended_codes": [
+            "phc",
+            "phc_che",
+            "phc_pc_usd",
+            "phc_ppp_pc",
+        ],
+        "typical_questions": [
+            "What share of CHE is primary health care?",
+            "Which countries report PHC spending consistently?",
+            "How has PHC spending changed since 2016?",
+        ],
+        "cautions": [
+            "PHC reporting can be partial; use metadata and missingness summaries.",
+        ],
+    },
+}
+
+_USE_CASE_KEYWORDS: dict[str, set[str]] = {
+    "health_financing_transition": {
+        "transition", "financing mix", "composition", "economic development",
+        "income", "prepaid", "mix", "sources",
+    },
+    "financial_protection_oop": {
+        "oop", "out-of-pocket", "out of pocket", "financial protection",
+        "catastrophic", "impoverishing", "household",
+    },
+    "government_priority": {
+        "government", "public", "fiscal", "priority", "budget", "gghe",
+        "gghed", "domestic general government",
+    },
+    "donor_dependence": {
+        "external", "donor", "aid", "development assistance", "dah",
+        "foreign",
+    },
+    "private_and_voluntary_insurance": {
+        "private", "voluntary", "insurance", "vhi", "prepayment",
+        "compulsory private",
+    },
+    "services_providers_sha": {
+        "function", "provider", "service", "disease", "condition", "scheme",
+        "revenue", "sha", "classification", "inpatient", "outpatient",
+    },
+    "primary_health_care": {
+        "primary health care", "phc", "primary care",
+    },
+}
+
+
+def research_use_cases() -> dict[str, Any]:
+    return {"use_cases": RESEARCH_USE_CASES}
+
+
+def suggest_use_cases(question: str) -> dict[str, Any]:
+    q = question.lower()
+    scores = []
+    for use_case, keywords in _USE_CASE_KEYWORDS.items():
+        score = sum(1 for keyword in keywords if keyword in q)
+        if score:
+            scores.append((score, use_case))
+    scores.sort(reverse=True)
+    if not scores:
+        scores = [(1, "core_spending")]
+
+    suggestions = []
+    for _, use_case in scores[:3]:
+        payload = RESEARCH_USE_CASES.get(use_case)
+        if payload:
+            suggestions.append({"use_case": use_case, **payload})
+        elif use_case in TOPICS:
+            topic = TOPICS[use_case]
+            suggestions.append({
+                "use_case": use_case,
+                "description": topic["description"],
+                "recommended_codes": topic["indicator_codes"],
+                "typical_questions": [],
+                "cautions": [],
+            })
+    return {
+        "question": question,
+        "suggestions": suggestions,
+        "general_cautions": METHODOLOGY_SUMMARY["analysis_cautions"],
+    }
+
 
 def methodology_summary() -> dict[str, Any]:
     return {
         "summary": METHODOLOGY_SUMMARY,
         "category_guide": CATEGORY_GUIDE,
         "topics": TOPICS,
+        "research_use_cases": RESEARCH_USE_CASES,
     }
 
 

@@ -145,6 +145,44 @@ async def test_methodology_guide_has_variable_classes():
     assert result["current_counts"]["category_1"][0]["count"] >= 1
 
 
+async def test_suggest_variables_for_research_question():
+    result = await server.suggest_variables_for_research_question(
+        "Did out-of-pocket spending decline after government spending rose?"
+    )
+
+    use_cases = [item["use_case"] for item in result["suggestions"]]
+    assert "financial_protection_oop" in use_cases
+
+
+async def test_data_availability_for_panel_inputs():
+    result = await server.data_availability(
+        ["che_gdp", "oops_che"],
+        countries=["Colombia", "Peru"],
+        year_start=2022,
+        year_end=2023,
+    )
+
+    by_code = {row["indicator_code"]: row for row in result["items"]}
+    assert by_code["che_gdp"]["observation_count"] == 3
+    assert by_code["che_gdp"]["country_count"] == 2
+    assert by_code["oops_che"]["latest_year"] == 2023
+
+
+async def test_build_research_panel_csv():
+    result = await server.build_research_panel(
+        ["che_gdp", "oops_che"],
+        countries=["Colombia"],
+        year_start=2022,
+        year_end=2023,
+        format="csv",
+    )
+
+    assert result["count"] == 4
+    assert result["csv"].startswith("indicator_code,indicator_name")
+    assert "che_gdp" in result["csv"]
+    assert "oops_che" in result["csv"]
+
+
 async def test_compare_countries_latest_csv():
     result = await server.compare_countries(
         "che_gdp",

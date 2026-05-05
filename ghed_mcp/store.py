@@ -688,6 +688,120 @@ class GHEDStore:
         rows = self._connect().execute(query, params).fetchall()
         return [_dict(row) for row in rows]
 
+    def data_availability(
+        self,
+        indicator_codes: list[str],
+        *,
+        countries: Iterable[str] | None = None,
+        year_start: int | None = None,
+        year_end: int | None = None,
+    ) -> list[dict[str, Any]]:
+        for code in indicator_codes:
+            if self.get_indicator(code) is None:
+                raise ValueError(f"Unknown GHED indicator '{code}'.")
+        resolved = None
+        if countries:
+            resolved = [self.resolve_country(c) for c in countries]
+
+        where = [f"o.indicator_code in ({', '.join('?' for _ in indicator_codes)})"]
+        params: list[Any] = list(indicator_codes)
+        if resolved:
+            where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
+            params.extend(resolved)
+        if year_start is not None:
+            where.append("o.year >= ?")
+            params.append(int(year_start))
+        if year_end is not None:
+            where.append("o.year <= ?")
+            params.append(int(year_end))
+
+        rows = self._connect().execute(
+            f"""
+            select
+                o.indicator_code,
+                i.indicator_name,
+                count(*) as observation_count,
+                count(distinct o.country_code) as country_count,
+                min(o.year) as first_year,
+                max(o.year) as latest_year
+            from observations o
+            left join indicators i on i.indicator_code = o.indicator_code
+            where {" and ".join(where)}
+            group by o.indicator_code, i.indicator_name
+            order by o.indicator_code
+            """,
+            params,
+        ).fetchall()
+        found = {row["indicator_code"] for row in rows}
+        out = [_dict(row) for row in rows]
+        for code in indicator_codes:
+            if code not in found:
+                indicator = self.get_indicator(code) or {}
+                out.append({
+                    "indicator_code": code,
+                    "indicator_name": indicator.get("indicator_name"),
+                    "observation_count": 0,
+                    "country_count": 0,
+                    "first_year": None,
+                    "latest_year": None,
+                })
+        return out
+
+    def research_panel(
+        self,
+        indicator_codes: list[str],
+        *,
+        countries: Iterable[str] | None = None,
+        year_start: int | None = None,
+        year_end: int | None = None,
+        top: int = 10000,
+    ) -> list[dict[str, Any]]:
+        for code in indicator_codes:
+            if self.get_indicator(code) is None:
+                raise ValueError(f"Unknown GHED indicator '{code}'.")
+        resolved = None
+        if countries:
+            resolved = [self.resolve_country(c) for c in countries]
+
+        where = [f"o.indicator_code in ({', '.join('?' for _ in indicator_codes)})"]
+        params: list[Any] = list(indicator_codes)
+        if resolved:
+            where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
+            params.extend(resolved)
+        if year_start is not None:
+            where.append("o.year >= ?")
+            params.append(int(year_start))
+        if year_end is not None:
+            where.append("o.year <= ?")
+            params.append(int(year_end))
+        params.append(top)
+
+        rows = self._connect().execute(
+            f"""
+            select
+                o.indicator_code,
+                i.indicator_name,
+                o.country_code,
+                c.country_name,
+                c.region,
+                c.income,
+                o.year,
+                o.value,
+                i.unit,
+                i.currency,
+                i.category_1,
+                i.category_2
+            from observations o
+            join countries c on c.country_code = o.country_code
+            left join indicators i on i.indicator_code = o.indicator_code
+            where {" and ".join(where)}
+            order by o.country_code, o.year, o.indicator_code
+            limit ?
+            """,
+            params,
+        ).fetchall()
+        return [_dict(row) for row in rows]
+
     def country_profile(
         self,
         country: str,

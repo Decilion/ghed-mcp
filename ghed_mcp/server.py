@@ -14,7 +14,12 @@ from .client import (
     provenance,
     read_source_manifest,
 )
-from .methodology import methodology_summary, topic_index
+from .methodology import (
+    research_use_cases as get_research_use_cases,
+    methodology_summary,
+    suggest_use_cases,
+    topic_index,
+)
 from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, rows_to_csv
 
 mcp = FastMCP("ghed")
@@ -105,6 +110,18 @@ async def methodology_guide() -> dict[str, Any]:
 async def topics_index() -> dict[str, Any]:
     """Curated GHED topic index mapping common user requests to variable codes."""
     return topic_index()
+
+
+@mcp.tool()
+async def research_use_cases() -> dict[str, Any]:
+    """Research patterns seen in GHED-using literature, with recommended variables."""
+    return get_research_use_cases()
+
+
+@mcp.tool()
+async def suggest_variables_for_research_question(question: str) -> dict[str, Any]:
+    """Map a natural-language research question to likely GHED variables and cautions."""
+    return suggest_use_cases(question)
 
 
 @mcp.tool()
@@ -253,6 +270,73 @@ async def get_country_metadata(
         "count": len(rows),
         "rows": rows,
     }
+
+
+@mcp.tool()
+async def data_availability(
+    indicator_codes: list[str],
+    countries: list[str] | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+) -> dict[str, Any]:
+    """Summarize availability for indicators before building a research panel."""
+    if not indicator_codes:
+        raise ValueError("indicator_codes must be a non-empty list.")
+    store = await get_store()
+    rows = store.data_availability(
+        indicator_codes,
+        countries=countries,
+        year_start=year_start,
+        year_end=year_end,
+    )
+    return {
+        "indicator_codes": indicator_codes,
+        "countries": countries,
+        "year_start": year_start,
+        "year_end": year_end,
+        "count": len(rows),
+        "items": rows,
+    }
+
+
+@mcp.tool()
+async def build_research_panel(
+    indicator_codes: list[str],
+    countries: list[str] | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    top: int = 10000,
+    format: str = "rows",
+) -> dict[str, Any]:
+    """Build a tidy long panel for multiple GHED variables across countries and years."""
+    if not indicator_codes:
+        raise ValueError("indicator_codes must be a non-empty list.")
+    fmt = format.lower()
+    if fmt not in ("rows", "csv"):
+        raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
+    top = max(1, min(top, 100000))
+    store = await get_store()
+    rows = store.research_panel(
+        indicator_codes,
+        countries=countries,
+        year_start=year_start,
+        year_end=year_end,
+        top=top,
+    )
+    result: dict[str, Any] = {
+        "indicator_codes": indicator_codes,
+        "countries": countries,
+        "year_start": year_start,
+        "year_end": year_end,
+        "count": len(rows),
+        "possibly_truncated": len(rows) >= top,
+        "format": fmt,
+    }
+    if fmt == "csv":
+        result["csv"] = rows_to_csv(rows)
+    else:
+        result["rows"] = rows
+    return result
 
 
 @mcp.tool()
@@ -461,6 +545,14 @@ async def methodology_resource() -> str:
     for topic_id, topic in guide["topics"].items():
         codes = ", ".join(f"`{c}`" for c in topic["indicator_codes"])
         lines.append(f"- `{topic_id}`: {topic['description']} {codes}")
+    lines.extend(["", "## Research Use Cases"])
+    for use_case, payload in guide["research_use_cases"].items():
+        codes = ", ".join(f"`{c}`" for c in payload.get("recommended_codes", []))
+        categories = ", ".join(
+            f"`{c}`" for c in payload.get("recommended_categories", [])
+        )
+        suffix = codes or categories
+        lines.append(f"- `{use_case}`: {payload['description']} {suffix}")
     return "\n".join(lines)
 
 
