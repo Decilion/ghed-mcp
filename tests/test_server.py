@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
-from ghed_mcp.client import document_download_url, find_latest_all_data_document
+from ghed_mcp.client import (
+    document_download_url,
+    find_latest_all_data_document,
+    normalize_source_document,
+)
 from ghed_mcp import server
 
 
@@ -143,6 +147,15 @@ async def test_country_profile_uses_default_indicators():
     assert result["indicators"][0]["year"] == 2023
 
 
+async def test_cache_status_reports_sqlite_counts():
+    result = await server.cache_status()
+
+    assert result["cache"]["sqlite_current"] is True
+    assert result["cache"]["counts"]["countries"] == 2
+    assert result["cache"]["counts"]["indicators"] == 2
+    assert result["cache"]["counts"]["observations"] == 6
+
+
 def test_find_latest_all_data_document_uses_documentation_tree():
     tree = {
         "IsFolder": True,
@@ -176,3 +189,19 @@ def test_find_latest_all_data_document_uses_documentation_tree():
     assert document_download_url(doc["Identifier"]).endswith(
         "/DocumentationCentre/GetFile/64396441/en"
     )
+
+
+def test_normalize_source_document():
+    doc = normalize_source_document({
+        "Identifier": 64396441,
+        "Name": "GHED all data (March 2026)",
+        "Description": "GHED all data (March 2026)",
+        "FileType": ".xlsx",
+        "FileName": "GHED all data (March 2026).xlsx",
+        "FileSize": 38922209,
+        "DateModified": "/Date(1774900345000)/",
+    })
+
+    assert doc["document_id"] == 64396441
+    assert doc["date_modified"] == "2026-03-30T19:52:25Z"
+    assert doc["download_url"].endswith("/DocumentationCentre/GetFile/64396441/en")

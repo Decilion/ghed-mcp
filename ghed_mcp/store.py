@@ -1,9 +1,12 @@
-"""Read and query the GHED workbook."""
+"""Read the GHED workbook into a derived SQLite cache and query it."""
 from __future__ import annotations
 
 import csv
 import io
+import json
+import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -19,6 +22,7 @@ DEFAULT_PROFILE_INDICATORS = [
     "gghed_gdp",
     "gghed_gge",
 ]
+SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -57,139 +61,442 @@ def _as_int(value: Any) -> int | None:
     return int(value)
 
 
-class GHEDStore:
-    """Small query layer over the public GHED XLSX workbook."""
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    def __init__(self, workbook_path: str | Path):
+
+def _dict(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
+
+
+class GHEDStore:
+    """SQLite-backed query layer over the public GHED XLSX workbook."""
+
+    def __init__(self, workbook_path: str | Path, sqlite_path: str | Path | None = None):
         self.path = Path(workbook_path)
-        self._header: list[str] | None = None
-        self._indicators: dict[str, Indicator] | None = None
-        self._countries: dict[str, dict[str, Any]] | None = None
-        self._version: list[str] | None = None
+        self.sqlite_path = Path(sqlite_path) if sqlite_path else self.path.with_suffix(".sqlite")
+        self._conn: sqlite3.Connection | None = None
+        self.ensure_sqlite()
 
     def _workbook(self):
         return load_workbook(self.path, read_only=True, data_only=True)
 
-    def data_header(self) -> list[str]:
-        if self._header is None:
-            wb = self._workbook()
-            try:
-                self._header = [str(v) for v in next(wb["Data"].iter_rows(values_only=True))]
-            finally:
-                wb.close()
-        return self._header
+    def _connect(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.sqlite_path)
+            self._conn.row_factory = sqlite3.Row
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def _source_signature(self) -> dict[str, Any]:
+        stat = self.path.stat()
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "workbook_path": str(self.path),
+            "workbook_size_bytes": stat.st_size,
+            "workbook_mtime_ns": stat.st_mtime_ns,
+        }
+
+    def _stored_manifest(self) -> dict[str, Any] | None:
+        if not self.sqlite_path.exists():
+            return None
+        try:
+            conn = sqlite3.connect(self.sqlite_path)
+            row = conn.execute(
+                "select value from manifest where key = 'source_signature'"
+            ).fetchone()
+            conn.close()
+        except sqlite3.Error:
+            return None
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except json.JSONDecodeError:
+            return None
+
+    def ensure_sqlite(self) -> None:
+        """Build or reuse the derived SQLite cache."""
+        signature = self._source_signature()
+        if self._stored_manifest() == signature:
+            return
+        self.rebuild_sqlite(signature)
+
+    def rebuild_sqlite(self, signature: dict[str, Any] | None = None) -> None:
+        """Rebuild the derived SQLite database from the cached workbook."""
+        self.close()
+        signature = signature or self._source_signature()
+        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.sqlite_path.with_suffix(".sqlite.tmp")
+        if tmp.exists():
+            tmp.unlink()
+
+        conn = sqlite3.connect(tmp)
+        try:
+            conn.execute("pragma journal_mode = off")
+            conn.execute("pragma synchronous = off")
+            conn.execute("pragma temp_store = memory")
+            self._create_schema(conn)
+            self._load_workbook_into(conn, signature)
+            conn.commit()
+        except Exception:
+            conn.close()
+            if tmp.exists():
+                tmp.unlink()
+            raise
+        conn.close()
+        tmp.replace(self.sqlite_path)
+
+    def _create_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            create table manifest (
+                key text primary key,
+                value text not null
+            );
+            create table countries (
+                country_code text primary key,
+                country_name text not null,
+                region text,
+                income text
+            );
+            create table indicators (
+                indicator_code text primary key,
+                indicator_name text,
+                long_code text,
+                category_1 text,
+                category_2 text,
+                unit text,
+                currency text,
+                measurement_method text
+            );
+            create table observations (
+                country_code text not null,
+                year integer not null,
+                indicator_code text not null,
+                value real not null,
+                primary key (indicator_code, country_code, year)
+            );
+            create table metadata (
+                country_code text not null,
+                indicator_code text not null,
+                country_name text,
+                region text,
+                income text,
+                long_code text,
+                indicator_name text,
+                sources text,
+                comments text,
+                data_type text,
+                methods_of_estimation text,
+                country_footnote text,
+                primary key (country_code, indicator_code)
+            );
+            create table version_lines (
+                line_no integer primary key,
+                text text not null
+            );
+            create index idx_observations_country_year
+                on observations(country_code, year);
+            create index idx_metadata_indicator
+                on metadata(indicator_code);
+            """
+        )
+
+    def _load_workbook_into(self, conn: sqlite3.Connection, signature: dict[str, Any]) -> None:
+        wb = self._workbook()
+        try:
+            header = [
+                str(v) for v in next(wb["Data"].iter_rows(values_only=True))
+            ]
+            indicators = self._load_indicators(conn, wb)
+            self._load_data(conn, wb, header, set(indicators))
+            self._load_metadata(conn, wb)
+            self._load_version(conn, wb)
+        finally:
+            wb.close()
+
+        conn.execute(
+            "insert into manifest(key, value) values (?, ?)",
+            ("source_signature", json.dumps(signature, sort_keys=True)),
+        )
+        conn.execute(
+            "insert into manifest(key, value) values (?, ?)",
+            ("built_at", _utc_now()),
+        )
+
+    def _load_indicators(self, conn: sqlite3.Connection, wb) -> list[str]:
+        out = []
+        rows = wb["Codebook"].iter_rows(values_only=True)
+        next(rows)
+        batch = []
+        for row in rows:
+            code = row[0]
+            if not code or code in CORE_COLUMNS:
+                continue
+            out.append(str(code))
+            batch.append((
+                str(code),
+                _clean(row[1]),
+                _clean(row[2]),
+                _clean(row[3]),
+                _clean(row[4]),
+                _clean(row[5]),
+                _clean(row[6]),
+                _clean(row[7]),
+            ))
+        conn.executemany(
+            """
+            insert into indicators(
+                indicator_code, indicator_name, long_code, category_1,
+                category_2, unit, currency, measurement_method
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            batch,
+        )
+        return out
+
+    def _load_data(
+        self,
+        conn: sqlite3.Connection,
+        wb,
+        header: list[str],
+        indicator_codes: set[str],
+    ) -> None:
+        indicator_indices = [
+            (idx, code) for idx, code in enumerate(header) if code in indicator_codes
+        ]
+        countries_seen: set[str] = set()
+        country_batch = []
+        observation_batch = []
+        rows = wb["Data"].iter_rows(values_only=True)
+        next(rows)
+        for row in rows:
+            country_code = row[1]
+            if not country_code:
+                continue
+            country_code = str(country_code)
+            if country_code not in countries_seen:
+                countries_seen.add(country_code)
+                country_batch.append((country_code, row[0], row[2], row[3]))
+            year = _as_int(row[4])
+            if year is None:
+                continue
+            for idx, indicator_code in indicator_indices:
+                if idx >= len(row):
+                    continue
+                value = row[idx]
+                if value is None:
+                    continue
+                observation_batch.append((country_code, year, indicator_code, float(value)))
+                if len(observation_batch) >= 50000:
+                    self._insert_observations(conn, observation_batch)
+                    observation_batch.clear()
+        conn.executemany(
+            """
+            insert into countries(country_code, country_name, region, income)
+            values (?, ?, ?, ?)
+            """,
+            country_batch,
+        )
+        if observation_batch:
+            self._insert_observations(conn, observation_batch)
+
+    def _insert_observations(
+        self,
+        conn: sqlite3.Connection,
+        rows: list[tuple[str, int, str, float]],
+    ) -> None:
+        conn.executemany(
+            """
+            insert into observations(country_code, year, indicator_code, value)
+            values (?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def _load_metadata(self, conn: sqlite3.Connection, wb) -> None:
+        rows = wb["Metadata"].iter_rows(values_only=True)
+        next(rows)
+        batch = []
+        for row in rows:
+            if not row[1] or not row[4]:
+                continue
+            batch.append((
+                row[1],
+                row[4],
+                row[0],
+                row[2],
+                row[3],
+                row[5],
+                row[6],
+                row[7],
+                row[8],
+                row[9],
+                row[10],
+                row[11],
+            ))
+        conn.executemany(
+            """
+            insert or replace into metadata(
+                country_code, indicator_code, country_name, region, income,
+                long_code, indicator_name, sources, comments, data_type,
+                methods_of_estimation, country_footnote
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            batch,
+        )
+
+    def _load_version(self, conn: sqlite3.Connection, wb) -> None:
+        batch = [
+            (idx, str(row[0]))
+            for idx, row in enumerate(wb["Version"].iter_rows(values_only=True), start=1)
+            if row and row[0]
+        ]
+        conn.executemany(
+            "insert into version_lines(line_no, text) values (?, ?)",
+            batch,
+        )
+
+    def cache_status(self) -> dict[str, Any]:
+        signature = self._source_signature()
+        manifest = self._stored_manifest()
+        conn = self._connect()
+        counts = {
+            "countries": conn.execute("select count(*) from countries").fetchone()[0],
+            "indicators": conn.execute("select count(*) from indicators").fetchone()[0],
+            "observations": conn.execute("select count(*) from observations").fetchone()[0],
+            "metadata_rows": conn.execute("select count(*) from metadata").fetchone()[0],
+        }
+        built = conn.execute("select value from manifest where key = 'built_at'").fetchone()
+        return {
+            "workbook_path": str(self.path),
+            "workbook_size_bytes": signature["workbook_size_bytes"],
+            "workbook_mtime_ns": signature["workbook_mtime_ns"],
+            "sqlite_path": str(self.sqlite_path),
+            "sqlite_exists": self.sqlite_path.exists(),
+            "sqlite_size_bytes": (
+                self.sqlite_path.stat().st_size if self.sqlite_path.exists() else None
+            ),
+            "sqlite_built_at": built[0] if built else None,
+            "sqlite_current": manifest == signature,
+            "schema_version": SCHEMA_VERSION,
+            "counts": counts,
+        }
 
     def indicators(self) -> list[dict[str, Any]]:
-        if self._indicators is None:
-            wb = self._workbook()
-            out: dict[str, Indicator] = {}
-            try:
-                rows = wb["Codebook"].iter_rows(values_only=True)
-                next(rows)
-                for row in rows:
-                    code = row[0]
-                    if not code or code in CORE_COLUMNS:
-                        continue
-                    ind = Indicator(
-                        indicator_code=str(code),
-                        indicator_name=_clean(row[1]),
-                        long_code=_clean(row[2]),
-                        category_1=_clean(row[3]),
-                        category_2=_clean(row[4]),
-                        unit=_clean(row[5]),
-                        currency=_clean(row[6]),
-                        measurement_method=_clean(row[7]),
-                    )
-                    out[ind.indicator_code] = ind
-            finally:
-                wb.close()
-            self._indicators = out
-        return [v.to_dict() for v in self._indicators.values()]
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            select indicator_code, indicator_name, long_code, category_1,
+                   category_2, unit, currency, measurement_method
+            from indicators
+            order by indicator_code
+            """
+        ).fetchall()
+        return [_dict(row) for row in rows]
 
     def indicator_map(self) -> dict[str, Indicator]:
-        if self._indicators is None:
-            self.indicators()
-        assert self._indicators is not None
-        return self._indicators
+        return {
+            row["indicator_code"]: Indicator(**row)
+            for row in self.indicators()
+        }
 
     def get_indicator(self, indicator_code: str) -> dict[str, Any] | None:
-        ind = self.indicator_map().get(indicator_code)
-        return ind.to_dict() if ind else None
+        conn = self._connect()
+        row = conn.execute(
+            """
+            select indicator_code, indicator_name, long_code, category_1,
+                   category_2, unit, currency, measurement_method
+            from indicators
+            where indicator_code = ?
+            """,
+            (indicator_code,),
+        ).fetchone()
+        return _dict(row) if row else None
 
     def search_indicators(self, query: str, top: int = 50) -> list[dict[str, Any]]:
         needle = query.lower().strip()
         if not needle:
             return []
-        matches = []
-        for item in self.indicators():
-            haystack = " ".join(
-                str(item.get(k) or "")
-                for k in (
-                    "indicator_code",
-                    "indicator_name",
-                    "long_code",
-                    "category_1",
-                    "category_2",
-                    "unit",
-                    "currency",
-                )
-            ).lower()
-            if needle in haystack:
-                matches.append(item)
-                if len(matches) >= top:
-                    break
-        return matches
+        like = f"%{needle}%"
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            select indicator_code, indicator_name, long_code, category_1,
+                   category_2, unit, currency, measurement_method
+            from indicators
+            where lower(coalesce(indicator_code, '')) like ?
+               or lower(coalesce(indicator_name, '')) like ?
+               or lower(coalesce(long_code, '')) like ?
+               or lower(coalesce(category_1, '')) like ?
+               or lower(coalesce(category_2, '')) like ?
+               or lower(coalesce(unit, '')) like ?
+               or lower(coalesce(currency, '')) like ?
+            order by indicator_code
+            limit ?
+            """,
+            (like, like, like, like, like, like, like, top),
+        ).fetchall()
+        return [_dict(row) for row in rows]
 
     def countries(self) -> list[dict[str, Any]]:
-        if self._countries is None:
-            wb = self._workbook()
-            out: dict[str, dict[str, Any]] = {}
-            try:
-                rows = wb["Data"].iter_rows(values_only=True)
-                next(rows)
-                for row in rows:
-                    code = row[1]
-                    if not code or code in out:
-                        continue
-                    out[str(code)] = {
-                        "country_code": str(code),
-                        "country_name": row[0],
-                        "region": row[2],
-                        "income": row[3],
-                    }
-            finally:
-                wb.close()
-            self._countries = out
-        return list(self._countries.values())
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            select country_code, country_name, region, income
+            from countries
+            order by country_name
+            """
+        ).fetchall()
+        return [_dict(row) for row in rows]
 
     def country_map(self) -> dict[str, dict[str, Any]]:
-        if self._countries is None:
-            self.countries()
-        assert self._countries is not None
-        return self._countries
+        return {row["country_code"]: row for row in self.countries()}
 
     def find_countries(self, query: str) -> list[dict[str, Any]]:
         needle = query.lower().strip()
-        return [
-            row for row in self.countries()
-            if needle in row["country_code"].lower()
-            or needle in str(row["country_name"]).lower()
-        ]
+        like = f"%{needle}%"
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            select country_code, country_name, region, income
+            from countries
+            where lower(country_code) like ? or lower(country_name) like ?
+            order by country_name
+            """,
+            (like, like),
+        ).fetchall()
+        return [_dict(row) for row in rows]
 
     def resolve_country(self, country: str) -> str:
         value = country.strip()
         upper = value.upper()
-        countries = self.country_map()
-        if upper in countries:
-            return upper
-        matches = [
-            code for code, row in countries.items()
-            if value.lower() in str(row["country_name"]).lower()
-        ]
+        conn = self._connect()
+        row = conn.execute(
+            "select country_code from countries where country_code = ?",
+            (upper,),
+        ).fetchone()
+        if row:
+            return row["country_code"]
+
+        matches = conn.execute(
+            """
+            select country_code, country_name
+            from countries
+            where lower(country_name) like ?
+            order by country_name
+            """,
+            (f"%{value.lower()}%",),
+        ).fetchall()
         if len(matches) == 1:
-            return matches[0]
+            return matches[0]["country_code"]
         if len(matches) > 1:
-            names = ", ".join(countries[c]["country_name"] for c in matches[:5])
+            names = ", ".join(row["country_name"] for row in matches[:5])
             more = "..." if len(matches) > 5 else ""
             raise ValueError(
                 f"Ambiguous country '{country}': {len(matches)} matches "
@@ -198,16 +505,11 @@ class GHEDStore:
         raise ValueError(f"Could not resolve country '{country}'. Pass an ISO3 code.")
 
     def version(self) -> dict[str, Any]:
-        if self._version is None:
-            wb = self._workbook()
-            try:
-                self._version = [
-                    str(row[0]) for row in wb["Version"].iter_rows(values_only=True)
-                    if row and row[0]
-                ]
-            finally:
-                wb.close()
-        return {"lines": list(self._version)}
+        conn = self._connect()
+        rows = conn.execute(
+            "select text from version_lines order by line_no"
+        ).fetchall()
+        return {"lines": [row["text"] for row in rows]}
 
     def indicator_data(
         self,
@@ -219,59 +521,84 @@ class GHEDStore:
         latest_only: bool = False,
         top: int = 1000,
     ) -> list[dict[str, Any]]:
-        header = self.data_header()
-        if indicator_code not in header:
+        if self.get_indicator(indicator_code) is None:
             raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
-        ind_idx = header.index(indicator_code)
-        indicator = self.indicator_map().get(indicator_code)
 
-        wanted = None
+        resolved = None
         if countries:
-            wanted = {self.resolve_country(c) for c in countries}
+            resolved = [self.resolve_country(c) for c in countries]
 
-        rows_out: list[dict[str, Any]] = []
-        wb = self._workbook()
-        try:
-            rows = wb["Data"].iter_rows(values_only=True)
-            next(rows)
-            for row in rows:
-                country_code = row[1]
-                if wanted is not None and country_code not in wanted:
-                    continue
-                year = _as_int(row[4])
-                if year_start is not None and (year is None or year < year_start):
-                    continue
-                if year_end is not None and (year is None or year > year_end):
-                    continue
-                value = row[ind_idx] if ind_idx < len(row) else None
-                if value is None:
-                    continue
-                rows_out.append({
-                    "indicator_code": indicator_code,
-                    "indicator_name": indicator.indicator_name if indicator else None,
-                    "country_code": country_code,
-                    "country_name": row[0],
-                    "region": row[2],
-                    "income": row[3],
-                    "year": year,
-                    "value": value,
-                    "unit": indicator.unit if indicator else None,
-                    "currency": indicator.currency if indicator else None,
-                    "category_1": indicator.category_1 if indicator else None,
-                    "category_2": indicator.category_2 if indicator else None,
-                })
-        finally:
-            wb.close()
+        where = ["o.indicator_code = ?"]
+        params: list[Any] = [indicator_code]
+        if resolved:
+            placeholders = ", ".join("?" for _ in resolved)
+            where.append(f"o.country_code in ({placeholders})")
+            params.extend(resolved)
+        if year_start is not None:
+            where.append("o.year >= ?")
+            params.append(int(year_start))
+        if year_end is not None:
+            where.append("o.year <= ?")
+            params.append(int(year_end))
 
-        rows_out.sort(key=lambda r: (r["country_code"], -(r["year"] or 0)))
         if latest_only:
-            latest: dict[str, dict[str, Any]] = {}
-            for row in rows_out:
-                current = latest.get(row["country_code"])
-                if current is None or (row["year"] or -1) > (current["year"] or -1):
-                    latest[row["country_code"]] = row
-            rows_out = sorted(latest.values(), key=lambda r: r["country_code"])
-        return rows_out[:top]
+            query = f"""
+                with ranked as (
+                    select
+                        o.indicator_code,
+                        i.indicator_name,
+                        o.country_code,
+                        c.country_name,
+                        c.region,
+                        c.income,
+                        o.year,
+                        o.value,
+                        i.unit,
+                        i.currency,
+                        i.category_1,
+                        i.category_2,
+                        row_number() over (
+                            partition by o.country_code
+                            order by o.year desc
+                        ) as rn
+                    from observations o
+                    join countries c on c.country_code = o.country_code
+                    left join indicators i on i.indicator_code = o.indicator_code
+                    where {" and ".join(where)}
+                )
+                select indicator_code, indicator_name, country_code, country_name,
+                       region, income, year, value, unit, currency, category_1,
+                       category_2
+                from ranked
+                where rn = 1
+                order by country_code
+                limit ?
+            """
+        else:
+            query = f"""
+                select
+                    o.indicator_code,
+                    i.indicator_name,
+                    o.country_code,
+                    c.country_name,
+                    c.region,
+                    c.income,
+                    o.year,
+                    o.value,
+                    i.unit,
+                    i.currency,
+                    i.category_1,
+                    i.category_2
+                from observations o
+                join countries c on c.country_code = o.country_code
+                left join indicators i on i.indicator_code = o.indicator_code
+                where {" and ".join(where)}
+                order by o.country_code, o.year desc
+                limit ?
+            """
+        params.append(top)
+        rows = self._connect().execute(query, params).fetchall()
+        return [_dict(row) for row in rows]
 
     def country_profile(
         self,
@@ -282,56 +609,63 @@ class GHEDStore:
     ) -> list[dict[str, Any]]:
         code = self.resolve_country(country)
         codes = indicator_codes or DEFAULT_PROFILE_INDICATORS
-        header = self.data_header()
-        missing = [indicator_code for indicator_code in codes if indicator_code not in header]
+        missing = [
+            indicator_code
+            for indicator_code in codes
+            if self.get_indicator(indicator_code) is None
+        ]
         if missing:
             raise ValueError(f"Unknown GHED indicator(s): {', '.join(missing)}")
 
-        indices = {indicator_code: header.index(indicator_code) for indicator_code in codes}
-        indicators = self.indicator_map()
+        placeholders = ", ".join("?" for _ in codes)
+        where = [
+            "o.country_code = ?",
+            f"o.indicator_code in ({placeholders})",
+        ]
+        params: list[Any] = [code, *codes]
+        if year is not None:
+            where.append("o.year <= ?")
+            params.append(int(year))
+
+        query = f"""
+            with ranked as (
+                select
+                    o.indicator_code,
+                    i.indicator_name,
+                    o.country_code,
+                    c.country_name,
+                    c.region,
+                    c.income,
+                    o.year,
+                    o.value,
+                    i.unit,
+                    i.currency,
+                    i.category_1,
+                    i.category_2,
+                    row_number() over (
+                        partition by o.indicator_code
+                        order by o.year desc
+                    ) as rn
+                from observations o
+                join countries c on c.country_code = o.country_code
+                left join indicators i on i.indicator_code = o.indicator_code
+                where {" and ".join(where)}
+            )
+            select indicator_code, indicator_name, country_code, country_name,
+                   region, income, year, value, unit, currency, category_1,
+                   category_2
+            from ranked
+            where rn = 1
+        """
+        rows = {
+            row["indicator_code"]: _dict(row)
+            for row in self._connect().execute(query, params).fetchall()
+        }
         countries = self.country_map()
-        latest: dict[str, dict[str, Any]] = {}
-
-        wb = self._workbook()
-        try:
-            rows = wb["Data"].iter_rows(values_only=True)
-            next(rows)
-            for row in rows:
-                if row[1] != code:
-                    continue
-                row_year = _as_int(row[4])
-                if year is not None and (row_year is None or row_year > year):
-                    continue
-                for indicator_code, idx in indices.items():
-                    value = row[idx] if idx < len(row) else None
-                    if value is None:
-                        continue
-                    current = latest.get(indicator_code)
-                    if current is None or (row_year or -1) > (current["year"] or -1):
-                        indicator = indicators.get(indicator_code)
-                        latest[indicator_code] = {
-                            "indicator_code": indicator_code,
-                            "indicator_name": (
-                                indicator.indicator_name if indicator else None
-                            ),
-                            "country_code": code,
-                            "country_name": countries[code]["country_name"],
-                            "region": row[2],
-                            "income": row[3],
-                            "year": row_year,
-                            "value": value,
-                            "unit": indicator.unit if indicator else None,
-                            "currency": indicator.currency if indicator else None,
-                            "category_1": indicator.category_1 if indicator else None,
-                            "category_2": indicator.category_2 if indicator else None,
-                        }
-        finally:
-            wb.close()
-
         results = []
         for indicator_code in codes:
-            if indicator_code in latest:
-                results.append(latest[indicator_code])
+            if indicator_code in rows:
+                results.append(rows[indicator_code])
             else:
                 indicator = self.get_indicator(indicator_code) or {}
                 results.append({
@@ -351,36 +685,26 @@ class GHEDStore:
         indicator_code: str | None = None,
         top: int = 20,
     ) -> list[dict[str, Any]]:
-        resolved = self.resolve_country(country) if country else None
-        wb = self._workbook()
-        out = []
-        try:
-            rows = wb["Metadata"].iter_rows(values_only=True)
-            next(rows)
-            for row in rows:
-                if resolved and row[1] != resolved:
-                    continue
-                if indicator_code and row[4] != indicator_code:
-                    continue
-                out.append({
-                    "country_name": row[0],
-                    "country_code": row[1],
-                    "region": row[2],
-                    "income": row[3],
-                    "indicator_code": row[4],
-                    "long_code": row[5],
-                    "indicator_name": row[6],
-                    "sources": row[7],
-                    "comments": row[8],
-                    "data_type": row[9],
-                    "methods_of_estimation": row[10],
-                    "country_footnote": row[11],
-                })
-                if len(out) >= top:
-                    break
-        finally:
-            wb.close()
-        return out
+        where = []
+        params: list[Any] = []
+        if country:
+            where.append("country_code = ?")
+            params.append(self.resolve_country(country))
+        if indicator_code:
+            where.append("indicator_code = ?")
+            params.append(indicator_code)
+        sql = """
+            select country_name, country_code, region, income, indicator_code,
+                   long_code, indicator_name, sources, comments, data_type,
+                   methods_of_estimation, country_footnote
+            from metadata
+        """
+        if where:
+            sql += " where " + " and ".join(where)
+        sql += " order by country_code, indicator_code limit ?"
+        params.append(top)
+        rows = self._connect().execute(sql, params).fetchall()
+        return [_dict(row) for row in rows]
 
 
 def rows_to_csv(rows: list[dict[str, Any]]) -> str:

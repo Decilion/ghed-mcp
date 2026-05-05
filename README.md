@@ -23,6 +23,8 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | Tool | Purpose |
 |---|---|
 | `refresh_cache` | Download or re-download the public GHED workbook |
+| `cache_status` | Show workbook, SQLite cache, source document, and row counts |
+| `check_for_updates` | Compare the cached source document with the current all-data workbook metadata |
 | `version` | Return workbook version and cache provenance |
 | `list_indicators` | Paginated GHED codebook |
 | `search_indicators` | Search indicator names, codes, categories, units, and long codes |
@@ -44,7 +46,15 @@ It then downloads the matching file through:
 
 `https://apps.who.int/nha/database/DocumentationCentre/GetFile/{document_id}/en`
 
-The workbook is cached under `~/.cache/ghed-mcp/ghed.xlsx` unless `GHED_MCP_CACHE_DIR` is set.
+The original workbook and derived cache are stored under `~/.cache/ghed-mcp/` unless `GHED_MCP_CACHE_DIR` is set:
+
+```text
+ghed.xlsx
+ghed.sqlite
+source-document.json
+```
+
+The XLSX remains the source of truth. The SQLite database is rebuilt when the workbook file changes and is used for fast MCP queries.
 
 ## Development
 

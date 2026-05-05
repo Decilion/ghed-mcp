@@ -53,11 +53,24 @@ def workbook_path() -> Path:
     return cache_dir() / "ghed.xlsx"
 
 
+def source_manifest_path() -> Path:
+    return cache_dir() / "source-document.json"
+
+
 def _parse_dotnet_date(value: str | None) -> int:
     if not value:
         return 0
     match = re.search(r"/Date\((-?\d+)\)/", value)
     return int(match.group(1)) if match else 0
+
+
+def _dotnet_date_to_iso(value: str | None) -> str | None:
+    timestamp = _parse_dotnet_date(value)
+    if not timestamp:
+        return None
+    return datetime.fromtimestamp(
+        timestamp / 1000, timezone.utc
+    ).isoformat().replace("+00:00", "Z")
 
 
 def _walk_documents(node: dict[str, Any]) -> list[dict[str, Any]]:
@@ -111,6 +124,45 @@ def document_download_url(document_id: int | str) -> str:
     return f"{BASE_URL}/nha/database/DocumentationCentre/GetFile/{document_id}/en"
 
 
+def normalize_source_document(doc: dict[str, Any]) -> dict[str, Any]:
+    document_id = doc.get("Identifier")
+    return {
+        "document_id": document_id,
+        "name": doc.get("Name"),
+        "description": doc.get("Description"),
+        "file_type": doc.get("FileType"),
+        "file_name": doc.get("FileName"),
+        "file_size": doc.get("FileSize"),
+        "date_modified_raw": doc.get("DateModified"),
+        "date_modified": _dotnet_date_to_iso(doc.get("DateModified")),
+        "download_url": document_download_url(document_id) if document_id else None,
+    }
+
+
+def read_source_manifest() -> dict[str, Any] | None:
+    path = source_manifest_path()
+    if not path.exists():
+        return None
+    try:
+        import json
+
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def write_source_manifest(document: dict[str, Any]) -> None:
+    import json
+
+    path = source_manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "source_document": normalize_source_document(document),
+        "downloaded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+
 async def download_workbook(
     *,
     destination: Path | None = None,
@@ -120,6 +172,7 @@ async def download_workbook(
     dest = destination or workbook_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
+    doc = None
     if source_url is None:
         doc = await get_latest_all_data_document()
         source_url = document_download_url(doc["Identifier"])
@@ -151,6 +204,8 @@ async def download_workbook(
         ) from e
 
     tmp.replace(dest)
+    if doc is not None:
+        write_source_manifest(doc)
     return dest
 
 

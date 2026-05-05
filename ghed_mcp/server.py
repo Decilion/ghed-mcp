@@ -6,7 +6,14 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import GHEDError, ensure_workbook, provenance
+from .client import (
+    GHEDError,
+    ensure_workbook,
+    get_latest_all_data_document,
+    normalize_source_document,
+    provenance,
+    read_source_manifest,
+)
 from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, rows_to_csv
 
 mcp = FastMCP("ghed")
@@ -26,7 +33,7 @@ async def get_store(refresh: bool = False) -> GHEDStore:
 
 @mcp.tool()
 async def refresh_cache() -> dict[str, Any]:
-    """Download or re-download the public GHED workbook."""
+    """Download or re-download the public GHED workbook and rebuild SQLite."""
     try:
         store = await get_store(refresh=True)
     except GHEDError as e:
@@ -34,7 +41,37 @@ async def refresh_cache() -> dict[str, Any]:
     return {
         "ok": True,
         "source": provenance(workbook=store.path, operation="refresh_cache"),
+        "source_document": read_source_manifest(),
+        "cache": store.cache_status(),
         "version": store.version(),
+    }
+
+
+@mcp.tool()
+async def cache_status() -> dict[str, Any]:
+    """Return local workbook and derived SQLite cache status."""
+    store = await get_store()
+    return {
+        "source": provenance(workbook=store.path, operation="cache_status"),
+        "source_document": read_source_manifest(),
+        "cache": store.cache_status(),
+        "version": store.version(),
+    }
+
+
+@mcp.tool()
+async def check_for_updates() -> dict[str, Any]:
+    """Compare the local cache source document with the current GHED all-data file."""
+    latest = normalize_source_document(await get_latest_all_data_document())
+    local_manifest = read_source_manifest()
+    local = (local_manifest or {}).get("source_document")
+    comparable = ["document_id", "file_size", "date_modified_raw", "name"]
+    changed = local is None or any(local.get(k) != latest.get(k) for k in comparable)
+    return {
+        "changed": changed,
+        "latest_source_document": latest,
+        "local_source_document": local,
+        "local_downloaded_at": (local_manifest or {}).get("downloaded_at"),
     }
 
 
@@ -44,6 +81,10 @@ async def version() -> dict[str, Any]:
     store = await get_store()
     return {
         "source": provenance(workbook=store.path, operation="version"),
+        "cache": {
+            "sqlite_path": str(store.sqlite_path),
+            "sqlite_current": store.cache_status()["sqlite_current"],
+        },
         "version": store.version(),
     }
 
