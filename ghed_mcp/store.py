@@ -568,16 +568,77 @@ class GHEDStore:
         ).fetchall()
         return [_dict(row) for row in rows]
 
-    def countries(self) -> list[dict[str, Any]]:
+    def countries(
+        self,
+        *,
+        region: str | None = None,
+        income: str | None = None,
+    ) -> list[dict[str, Any]]:
         conn = self._connect()
-        rows = conn.execute(
-            """
+        where = []
+        params: list[Any] = []
+        if region:
+            where.append("lower(region) = lower(?)")
+            params.append(region)
+        if income:
+            where.append("lower(income) = lower(?)")
+            params.append(income)
+        sql = """
             select country_code, country_name, region, income
             from countries
-            order by country_name
-            """
+        """
+        if where:
+            sql += " where " + " and ".join(where)
+        sql += " order by country_name"
+        rows = conn.execute(
+            sql,
+            params,
         ).fetchall()
         return [_dict(row) for row in rows]
+
+    def country_groups(self) -> dict[str, Any]:
+        conn = self._connect()
+        regions = [
+            {"region": row["region"], "country_count": row["country_count"]}
+            for row in conn.execute(
+                """
+                select region, count(*) as country_count
+                from countries
+                where region is not null
+                group by region
+                order by region
+                """
+            ).fetchall()
+        ]
+        incomes = [
+            {"income": row["income"], "country_count": row["country_count"]}
+            for row in conn.execute(
+                """
+                select income, count(*) as country_count
+                from countries
+                where income is not null
+                group by income
+                order by income
+                """
+            ).fetchall()
+        ]
+        cross = [
+            {
+                "region": row["region"],
+                "income": row["income"],
+                "country_count": row["country_count"],
+            }
+            for row in conn.execute(
+                """
+                select region, income, count(*) as country_count
+                from countries
+                where region is not null and income is not null
+                group by region, income
+                order by region, income
+                """
+            ).fetchall()
+        ]
+        return {"regions": regions, "income_groups": incomes, "region_income": cross}
 
     def country_map(self) -> dict[str, dict[str, Any]]:
         return {row["country_code"]: row for row in self.countries()}
@@ -656,6 +717,8 @@ class GHEDStore:
         indicator_code: str,
         *,
         countries: Iterable[str] | None = None,
+        region: str | None = None,
+        income: str | None = None,
         year_start: int | None = None,
         year_end: int | None = None,
         latest_only: bool = False,
@@ -674,6 +737,12 @@ class GHEDStore:
             placeholders = ", ".join("?" for _ in resolved)
             where.append(f"o.country_code in ({placeholders})")
             params.extend(resolved)
+        if region:
+            where.append("lower(c.region) = lower(?)")
+            params.append(region)
+        if income:
+            where.append("lower(c.income) = lower(?)")
+            params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))
@@ -745,6 +814,8 @@ class GHEDStore:
         indicator_codes: list[str],
         *,
         countries: Iterable[str] | None = None,
+        region: str | None = None,
+        income: str | None = None,
         year_start: int | None = None,
         year_end: int | None = None,
     ) -> list[dict[str, Any]]:
@@ -760,6 +831,12 @@ class GHEDStore:
         if resolved:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
+        if region:
+            where.append("lower(c.region) = lower(?)")
+            params.append(region)
+        if income:
+            where.append("lower(c.income) = lower(?)")
+            params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))
@@ -777,6 +854,7 @@ class GHEDStore:
                 min(o.year) as first_year,
                 max(o.year) as latest_year
             from observations o
+            join countries c on c.country_code = o.country_code
             left join indicators i on i.indicator_code = o.indicator_code
             where {" and ".join(where)}
             group by o.indicator_code, i.indicator_name
@@ -804,6 +882,8 @@ class GHEDStore:
         indicator_codes: list[str],
         *,
         countries: Iterable[str] | None = None,
+        region: str | None = None,
+        income: str | None = None,
         year_start: int | None = None,
         year_end: int | None = None,
         top: int = 10000,
@@ -820,6 +900,12 @@ class GHEDStore:
         if resolved:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
+        if region:
+            where.append("lower(c.region) = lower(?)")
+            params.append(region)
+        if income:
+            where.append("lower(c.income) = lower(?)")
+            params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))

@@ -256,6 +256,29 @@ async def test_data_availability_for_panel_inputs():
     assert by_code["oops_che"]["latest_year"] == 2023
 
 
+async def test_country_groups_and_filters():
+    groups = await server.list_country_groups()
+    assert {"region": "AMR", "country_count": 3} in groups["regions"]
+    assert {"income": "Upper-middle", "country_count": 2} in groups["income_groups"]
+
+    upper_middle = await server.list_countries(income="Upper-middle")
+    assert upper_middle["count"] == 2
+    assert {row["country_code"] for row in upper_middle["items"]} == {"COL", "PER"}
+
+
+async def test_data_availability_accepts_region_and_income_filters():
+    result = await server.data_availability(
+        ["che_gdp"],
+        region="AMR",
+        income="High",
+    )
+
+    assert result["region"] == "AMR"
+    assert result["income"] == "High"
+    assert result["items"][0]["country_count"] == 1
+    assert result["items"][0]["observation_count"] == 1
+
+
 async def test_build_research_panel_csv():
     result = await server.build_research_panel(
         ["che_gdp", "oops_che"],
@@ -269,6 +292,17 @@ async def test_build_research_panel_csv():
     assert result["csv"].startswith("indicator_code,indicator_name")
     assert "che_gdp" in result["csv"]
     assert "oops_che" in result["csv"]
+
+
+async def test_build_research_panel_accepts_group_filters():
+    result = await server.build_research_panel(
+        ["che_gdp"],
+        region="AMR",
+        income="High",
+    )
+
+    assert result["count"] == 1
+    assert result["rows"][0]["country_code"] == "USA"
 
 
 async def test_compare_countries_latest_csv():
@@ -286,6 +320,19 @@ async def test_compare_countries_latest_csv():
     assert "csv" in result
     assert "COL,Colombia,AMR,Upper-middle,2023,8.3" in result["csv"]
     assert "PER,Peru,AMR,Upper-middle,2022,5.5" in result["csv"]
+    assert result["warnings"][0]["type"] == "mixed_latest_years"
+
+
+async def test_compare_country_group():
+    result = await server.compare_country_group(
+        "che_gdp",
+        income="Upper-middle",
+        latest_only=True,
+    )
+
+    assert result["country_count"] == 2
+    assert {row["country_code"] for row in result["countries"]} == {"COL", "PER"}
+    assert {row["country_code"] for row in result["rows"]} == {"COL", "PER"}
     assert result["warnings"][0]["type"] == "mixed_latest_years"
 
 

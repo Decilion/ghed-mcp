@@ -24,3 +24,4 @@
 - Added literature-inspired research workflows: `research_use_cases`, `suggest_variables_for_research_question`, `data_availability`, and `build_research_panel`.
 - Added additive hierarchy support: curated codebook formulas for CHE/GGHE-D/PVT-D/EXT and inferred SHA direct-child trees for current-NCU amount variables. Exposed through `additive_hierarchy` and `build_additive_breakdown`.
 - Compared the sibling GHO MCP and ported the parts that fit GHED: strict FastMCP tool argument validation, common country aliases, `find_country_code(country=...)` with the old `country_name` alias retained, topic/use-case resources, and top-limit warnings for research panels.
+- Added researcher-facing country grouping support based on workbook `region` and `income` columns: `list_country_groups`, grouped `list_countries`, grouped availability/panel/data filters, and `compare_country_group`.

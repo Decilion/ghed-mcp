@@ -36,6 +36,7 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `search_indicators` | Search headline indicators by default |
 | `search_variables` | Search all variables, including detailed SHA series |
 | `list_countries` | Countries and territories in the workbook |
+| `list_country_groups` | Available GHED region and income group values |
 | `find_country_code` | Resolve a country name fragment to ISO3 |
 | `get_indicator_metadata` | Codebook metadata for one variable |
 | `get_country_metadata` | Source and estimation notes for one country/indicator |
@@ -45,6 +46,7 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `build_research_panel` | Tidy long panel for multiple variables, countries, and years |
 | `get_indicator_data` | One indicator with optional country and year filters |
 | `compare_countries` | One indicator across countries, returned as tidy rows or CSV |
+| `compare_country_group` | One indicator across countries matching a region and/or income group |
 | `country_profile` | Latest headline health expenditure values for one country |
 
 ## Data Source
@@ -76,6 +78,8 @@ GHED's all-data workbook has thousands of variables because it contains both use
 - `MACRO DATA` contains denominators and conversion variables such as GDP, population, exchange rates, and price indexes.
 
 Use `methodology_guide` before broad analytical requests and `topics_index` to map common questions to recommended codes.
+
+Country rows include `region` and `income` fields from the GHED workbook. Use `list_country_groups` to inspect available groups, then pass `region` and/or `income` to `list_countries`, `data_availability`, `build_research_panel`, `get_indicator_data`, or `compare_country_group`.
 
 Research-facing helpers are based on common GHED use patterns in the literature:
 

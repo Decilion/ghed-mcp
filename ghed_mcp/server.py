@@ -236,11 +236,26 @@ async def search_variables(
 
 
 @mcp.tool()
-async def list_countries() -> dict[str, Any]:
-    """List countries and territories available in GHED."""
+async def list_countries(
+    region: str | None = None,
+    income: str | None = None,
+) -> dict[str, Any]:
+    """List countries and territories available in GHED, optionally by group."""
     store = await get_store()
-    items = store.countries()
-    return {"count": len(items), "items": items}
+    items = store.countries(region=region, income=income)
+    return {
+        "region": region,
+        "income": income,
+        "count": len(items),
+        "items": items,
+    }
+
+
+@mcp.tool()
+async def list_country_groups() -> dict[str, Any]:
+    """List GHED country grouping values by region and World Bank income class."""
+    store = await get_store()
+    return store.country_groups()
 
 
 @mcp.tool()
@@ -291,6 +306,8 @@ async def get_country_metadata(
 async def data_availability(
     indicator_codes: list[str],
     countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
     year_start: int | None = None,
     year_end: int | None = None,
 ) -> dict[str, Any]:
@@ -301,12 +318,16 @@ async def data_availability(
     rows = store.data_availability(
         indicator_codes,
         countries=countries,
+        region=region,
+        income=income,
         year_start=year_start,
         year_end=year_end,
     )
     return {
         "indicator_codes": indicator_codes,
         "countries": countries,
+        "region": region,
+        "income": income,
         "year_start": year_start,
         "year_end": year_end,
         "count": len(rows),
@@ -352,6 +373,8 @@ async def build_additive_breakdown(
 async def build_research_panel(
     indicator_codes: list[str],
     countries: list[str] | None = None,
+    region: str | None = None,
+    income: str | None = None,
     year_start: int | None = None,
     year_end: int | None = None,
     top: int = 10000,
@@ -368,6 +391,8 @@ async def build_research_panel(
     rows = store.research_panel(
         indicator_codes,
         countries=countries,
+        region=region,
+        income=income,
         year_start=year_start,
         year_end=year_end,
         top=top,
@@ -375,6 +400,8 @@ async def build_research_panel(
     result: dict[str, Any] = {
         "indicator_codes": indicator_codes,
         "countries": countries,
+        "region": region,
+        "income": income,
         "year_start": year_start,
         "year_end": year_end,
         "count": len(rows),
@@ -401,6 +428,8 @@ async def build_research_panel(
 async def get_indicator_data(
     indicator_code: str,
     country: str | None = None,
+    region: str | None = None,
+    income: str | None = None,
     year_start: int | None = None,
     year_end: int | None = None,
     latest_only: bool = False,
@@ -413,6 +442,8 @@ async def get_indicator_data(
     rows = store.indicator_data(
         indicator_code,
         countries=countries,
+        region=region,
+        income=income,
         year_start=year_start,
         year_end=year_end,
         latest_only=latest_only,
@@ -426,6 +457,8 @@ async def get_indicator_data(
             params={
                 "indicator_code": indicator_code,
                 "country": country,
+                "region": region,
+                "income": income,
                 "year_start": year_start,
                 "year_end": year_end,
                 "latest_only": latest_only,
@@ -487,6 +520,77 @@ async def compare_countries(
             params={
                 "indicator_code": indicator_code,
                 "countries": countries,
+                "year_start": year_start,
+                "year_end": year_end,
+                "latest_only": latest_only,
+                "top": top,
+                "format": fmt,
+            },
+        ),
+        "count": len(rows),
+        "possibly_truncated": len(rows) >= top,
+    }
+    if latest_only:
+        years = {row["year"] for row in rows if row.get("year") is not None}
+        if len(years) > 1:
+            result.setdefault("warnings", []).append({
+                "type": "mixed_latest_years",
+                "message": (
+                    "latest_only=True returned different latest years across "
+                    "countries. Comparing across years can mislead."
+                ),
+                "years_seen": sorted(years),
+            })
+    if fmt == "csv":
+        result["csv"] = rows_to_csv(rows)
+    else:
+        result["rows"] = rows
+    return result
+
+
+@mcp.tool()
+async def compare_country_group(
+    indicator_code: str,
+    region: str | None = None,
+    income: str | None = None,
+    year_start: int | None = None,
+    year_end: int | None = None,
+    latest_only: bool = True,
+    top: int = 5000,
+    format: str = "rows",
+) -> dict[str, Any]:
+    """Compare one GHED indicator for countries matching a region and/or income group."""
+    if not region and not income:
+        raise ValueError("Pass at least one of 'region' or 'income'.")
+    fmt = format.lower()
+    if fmt not in ("rows", "csv"):
+        raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
+    top = max(1, min(top, 10000))
+
+    store = await get_store()
+    countries = store.countries(region=region, income=income)
+    rows = store.indicator_data(
+        indicator_code,
+        region=region,
+        income=income,
+        year_start=year_start,
+        year_end=year_end,
+        latest_only=latest_only,
+        top=top,
+    )
+    result: dict[str, Any] = {
+        "indicator_code": indicator_code,
+        "region": region,
+        "income": income,
+        "country_count": len(countries),
+        "countries": countries,
+        "source": provenance(
+            workbook=store.path,
+            operation="compare_country_group",
+            params={
+                "indicator_code": indicator_code,
+                "region": region,
+                "income": income,
                 "year_start": year_start,
                 "year_end": year_end,
                 "latest_only": latest_only,
