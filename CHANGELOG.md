@@ -45,13 +45,14 @@ between the private 0.1.0 scaffold and public release.
   3M+ observations indexed for fast lookup. `INDICATORS`,
   `HEALTH EXPENDITURE DATA`, and `MACRO DATA` variable classes exposed
   separately so headline analysis doesn't drown in detailed series.
-- **33 MCP tools** covering cache and version (`refresh_cache`,
+- **35 MCP tools** covering cache and version (`refresh_cache`,
   `cache_status`, `check_for_updates`, `version`), methodology and
   discovery (`methodology_guide`, `topics_index`, `research_use_cases`,
   `suggest_variables_for_research_question`, `list_variable_categories`,
   `list_indicators`, `list_variables`, `search_indicators`,
   `search_variables`, `get_indicator_metadata`), country resolution
-  (`list_countries`, `list_country_groups`, `find_country_code`,
+  (`list_countries`, `list_country_groups`, `list_curated_country_groups`,
+  `resolve_country_group_membership`, `find_country_code`,
   `get_country_metadata`, `country_profile`), data extraction
   (`get_indicator_data`, `compare_countries`, `compare_country_group`,
   `summarize_country_group`, `indicator_trend`, `compare_trends`,
@@ -103,7 +104,7 @@ between the private 0.1.0 scaffold and public release.
   data CSV, codebook CSV, availability CSV, and a README text block in
   one call.
 - **Tool annotations.** Every tool declares `readOnlyHint` and
-  `openWorldHint` per MCP best practices. All 32 read tools are marked
+  `openWorldHint` per MCP best practices. All 34 read tools are marked
   `openWorldHint=True` because the cold-cache path can transparently
   fetch the workbook from WHO; `refresh_cache` is the only
   non-read-only tool.
