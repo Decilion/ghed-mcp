@@ -157,6 +157,64 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 - **Resource** `ghed://research-use-cases/{use_case}` — readable view of one research use case
 - **Prompt** `compare_health_expenditure(countries, indicator)` — guided template for cross-country health-financing analysis
 
+## Regional analysis
+
+Both `gho-mcp` and `ghed-mcp` expose the same curated country groupings beyond what WHO and the World Bank publish as built-in dimensions. Pass `country_group="LAC"` (or any of the codes below) on the data tools and the server resolves to the right ISO3 list — without you having to enumerate codes by hand.
+
+### Available groups
+
+| Code | Definition | Members |
+|---|---|---|
+| `LAC` | 33 sovereign Latin American & Caribbean states (PAHO/Decilion convention) | 33 |
+| `LAC_TERRITORIES` | World Bank's 42-economy LAC region — sovereign states plus territories (Aruba, Cayman Islands, Curaçao, Puerto Rico, etc.) | 42 |
+| `EAP` | World Bank East Asia & Pacific | 40 |
+| `ECA` | World Bank Europe & Central Asia | 58 |
+| `MENA` | World Bank Middle East & North Africa | 21 |
+| `MENA_EXCL_ISR_MLT` | MENA excluding Israel and Malta (Arab-majority/developing focus) | 19 |
+| `NAR` | World Bank North America (Bermuda, Canada, USA) | 3 |
+| `SAS` | World Bank South Asia | 8 |
+| `SSA` | World Bank Sub-Saharan Africa | 48 |
+| `LDC` | UN Least Developed Countries | 44 |
+| `OECD` | OECD member countries | 38 |
+
+Aliases include natural-language ("Latin America and Caribbean", "Sub-Saharan Africa", "Least Developed Countries") and official codes (`LCN`, `SSF`, etc.). Two read-only tools — `list_curated_country_groups` and `resolve_country_group_membership` — let an assistant inspect or expand the lists at runtime.
+
+### Using `country_group=` on the data tools
+
+`country_group=` merges (deduplicated) with any explicit `countries=` list and composes with `region` / `income` via AND semantics. Some illustrative calls — the first four work identically on both `ghed-mcp` and `gho-mcp`:
+
+```text
+compare_countries(indicator_code="oops_che", country_group="LAC",
+                  latest_only=True)                               # GHED
+compare_countries(indicator_code="WHOSIS_000001", country_group="OECD",
+                  year_start=2010, year_end=2023)                 # GHO
+list_curated_country_groups()                                     # both
+resolve_country_group_membership("LAC")                           # both — returns 33 ISO3 codes
+
+# ghed-mcp also exposes:
+build_research_panel(indicator_codes=["che_gdp", "gghed_che"],
+                     country_group="OECD", year_start=2000, year_end=2024)
+summarize_country_group(indicator_code="ext_che", country_group="LDC",
+                        latest_only=True)
+list_countries(country_group="LAC", income="High")                # LAC HICs
+```
+
+Curated-group members are **soft-resolved**: ISO3 codes the underlying source doesn't publish are silently dropped (e.g. `LAC_TERRITORIES` includes Aruba and Curaçao, which GHED doesn't cover). User-supplied `countries=` are still strict-resolved, so typos still raise.
+
+### Membership cadence
+
+The lists are static Python data baked into each package — no runtime refresh, no separate cache. Users get updates by reinstalling the package.
+
+The `LAST_VERIFIED` constant in `country_groups.py` records when each list was last cross-checked against:
+
+- World Bank country and lending groups: <https://datahelpdesk.worldbank.org/knowledgebase/articles/906519>
+- UN Least Developed Countries: <https://www.un.org/development/desa/dpad/least-developed-country-category.html>
+- OECD members: <https://www.oecd.org/about/document/list-oecd-member-countries.htm>
+
+Re-check annually. Known upcoming changes at the time of writing: Bangladesh, Lao PDR, and Nepal are scheduled to graduate from LDC status on 2026-11-24; Solomon Islands on 2027-12-13.
+
+The same `country_groups.py` file lives in both `ghed-mcp` and `gho-mcp` (canonical source: `ghed-mcp`), so a regional analysis behaves identically against either database.
+
 ## Examples
 
 Each block below shows a natural-language prompt and a sketch of the underlying tool calls.
