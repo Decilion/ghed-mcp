@@ -1,15 +1,15 @@
 [project]
 name = "mcp-server-ghed"
-version = "0.1.0"
+version = "0.5.0"
 description = "MCP server for the WHO Global Health Expenditure Database (GHED)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "Decilion", email = "171707080+j-garciaruiz@users.noreply.github.com" }]
-keywords = ["mcp", "model-context-protocol", "who", "ghed", "health-expenditure", "global-health"]
+keywords = ["mcp", "model-context-protocol", "who", "ghed", "health-expenditure", "health-financing", "global-health", "sha-2011"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -31,6 +31,11 @@ dev = [
     "build>=1.2",
     "twine>=5.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Decilion/ghed-mcp"
+Issues = "https://github.com/Decilion/ghed-mcp/issues"
+"Built by" = "https://decilion.com"
 
 [project.scripts]
 ghed-mcp = "ghed_mcp.server:main"

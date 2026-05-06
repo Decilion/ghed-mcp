@@ -7,3 +7,9 @@ dist/
 build/
 .DS_Store
 .ghed-cache/
+
+# Local-only AI session context — kept out of the public repo intentionally.
+CLAUDE.md
+
+# Internal review notes — kept private for the same reason.
+dev-notes/
