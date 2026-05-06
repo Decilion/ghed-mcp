@@ -10,6 +10,7 @@ build/
 
 # Local-only AI session context — kept out of the public repo intentionally.
 CLAUDE.md
+AGENTS.md
 
 # Internal review notes — kept private for the same reason.
 dev-notes/
