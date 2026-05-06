@@ -110,11 +110,27 @@ INCOME_ALIASES: dict[str, str] = {
     "HIGH INCOME COUNTRIES": "High",
     "HIC": "High",
 }
-# Note: "LMIC" and "LMC" are intentionally NOT mapped. In global health
-# usage, "LMICs" usually means low- AND middle-income countries collectively
-# (Low + Lower-middle + Upper-middle), not just lower-middle. Mapping them
-# would silently exclude the other groups from researcher queries. To get
-# LMIC-collective behavior, query the three groups separately.
+
+# Collective aliases that expand to multiple GHED income labels. In global
+# health literature "LMICs" almost always refers to low + middle income
+# countries collectively (Low + Lower-middle + Upper-middle), not the World
+# Bank's narrower "lower-middle-income" definition. We resolve the academic
+# collective interpretation; users who want only Lower-middle can pass
+# "Lower-middle" or "lower middle income".
+INCOME_GROUP_ALIASES: dict[str, list[str]] = {
+    "LMIC": ["Low", "Lower-middle", "Upper-middle"],
+    "LMICS": ["Low", "Lower-middle", "Upper-middle"],
+    "LMC": ["Low", "Lower-middle", "Upper-middle"],
+    "LOW AND MIDDLE INCOME": ["Low", "Lower-middle", "Upper-middle"],
+    "LOW AND MIDDLE INCOME COUNTRIES": ["Low", "Lower-middle", "Upper-middle"],
+    "NON HIC": ["Low", "Lower-middle", "Upper-middle"],
+    "NON HIGH INCOME": ["Low", "Lower-middle", "Upper-middle"],
+    "NON HIGH INCOME COUNTRIES": ["Low", "Lower-middle", "Upper-middle"],
+    "MIC": ["Lower-middle", "Upper-middle"],
+    "MICS": ["Lower-middle", "Upper-middle"],
+    "MIDDLE INCOME": ["Lower-middle", "Upper-middle"],
+    "MIDDLE INCOME COUNTRIES": ["Lower-middle", "Upper-middle"],
+}
 
 
 def _norm_group_key(value: str) -> str:
@@ -717,22 +733,55 @@ class GHEDStore:
             f"{', '.join(available) if available else '(none in workbook)'}."
         )
 
-    def normalize_income(self, value: str | None) -> str | None:
+    def normalize_income(self, value: str | None) -> list[str] | None:
+        """Resolve an income filter to one or more canonical GHED labels.
+
+        Single-group aliases like "Upper-middle" or "UMIC" return a one-item
+        list. Collective aliases like "LMIC" or "MIC" expand to multiple
+        labels (Low + Lower-middle + Upper-middle, etc.) so a single SQL
+        IN-filter covers the whole group.
+        """
         if value is None:
             return None
         if not str(value).strip():
             return None
         available = self.available_incomes()
-        canonical = INCOME_ALIASES.get(_norm_group_key(value))
+        key = _norm_group_key(value)
+
+        collective = INCOME_GROUP_ALIASES.get(key)
+        if collective:
+            resolved = [item for item in collective if item in available]
+            if not resolved:
+                raise ValueError(
+                    f"Income alias '{value}' expands to {collective} but none "
+                    f"of these match the workbook. Available: "
+                    f"{', '.join(available) if available else '(none)'}."
+                )
+            return resolved
+
+        canonical = INCOME_ALIASES.get(key)
         if canonical and canonical in available:
-            return canonical
+            return [canonical]
         for income in available:
-            if _norm_group_key(income) == _norm_group_key(value):
-                return income
+            if _norm_group_key(income) == key:
+                return [income]
+        collective_hint = (
+            "LMIC (Low + Lower-middle + Upper-middle), "
+            "MIC (Lower-middle + Upper-middle)"
+        )
         raise ValueError(
             f"Unknown income group '{value}'. Available income groups: "
-            f"{', '.join(available) if available else '(none in workbook)'}."
+            f"{', '.join(available) if available else '(none in workbook)'}. "
+            f"Collective aliases: {collective_hint}."
         )
+
+    @staticmethod
+    def _income_clause(incomes: list[str]) -> tuple[str, list[str]]:
+        """Build a SQL fragment matching one or many income labels."""
+        if len(incomes) == 1:
+            return "= ?", list(incomes)
+        placeholders = ", ".join("?" for _ in incomes)
+        return f"IN ({placeholders})", list(incomes)
 
     def countries(
         self,
@@ -741,16 +790,17 @@ class GHEDStore:
         income: str | None = None,
     ) -> list[dict[str, Any]]:
         region = self.normalize_region(region)
-        income = self.normalize_income(income)
+        incomes = self.normalize_income(income)
         conn = self._connect()
         where = []
         params: list[Any] = []
         if region:
             where.append("region = ?")
             params.append(region)
-        if income:
-            where.append("income = ?")
-            params.append(income)
+        if incomes:
+            clause, values = self._income_clause(incomes)
+            where.append(f"income {clause}")
+            params.extend(values)
         sql = """
             select country_code, country_name, region, income
             from countries
@@ -895,7 +945,7 @@ class GHEDStore:
         if self.get_indicator(indicator_code) is None:
             raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
         region = self.normalize_region(region)
-        income = self.normalize_income(income)
+        incomes = self.normalize_income(income)
 
         resolved = None
         if countries:
@@ -910,9 +960,10 @@ class GHEDStore:
         if region:
             where.append("c.region = ?")
             params.append(region)
-        if income:
-            where.append("c.income = ?")
-            params.append(income)
+        if incomes:
+            clause, values = self._income_clause(incomes)
+            where.append(f"c.income {clause}")
+            params.extend(values)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))
@@ -993,7 +1044,7 @@ class GHEDStore:
             if self.get_indicator(code) is None:
                 raise ValueError(f"Unknown GHED indicator '{code}'.")
         region = self.normalize_region(region)
-        income = self.normalize_income(income)
+        incomes = self.normalize_income(income)
         resolved = None
         if countries:
             resolved = [self.resolve_country(c) for c in countries]
@@ -1006,9 +1057,10 @@ class GHEDStore:
         if region:
             where.append("c.region = ?")
             params.append(region)
-        if income:
-            where.append("c.income = ?")
-            params.append(income)
+        if incomes:
+            clause, values = self._income_clause(incomes)
+            where.append(f"c.income {clause}")
+            params.extend(values)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))
@@ -1064,7 +1116,7 @@ class GHEDStore:
             if self.get_indicator(code) is None:
                 raise ValueError(f"Unknown GHED indicator '{code}'.")
         region = self.normalize_region(region)
-        income = self.normalize_income(income)
+        incomes = self.normalize_income(income)
         resolved = None
         if countries:
             resolved = [self.resolve_country(c) for c in countries]
@@ -1077,9 +1129,10 @@ class GHEDStore:
         if region:
             where.append("c.region = ?")
             params.append(region)
-        if income:
-            where.append("c.income = ?")
-            params.append(income)
+        if incomes:
+            clause, values = self._income_clause(incomes)
+            where.append(f"c.income {clause}")
+            params.extend(values)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))
@@ -1304,7 +1357,7 @@ class GHEDStore:
         if self.get_indicator(indicator_code) is None:
             raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
         region = self.normalize_region(region)
-        income = self.normalize_income(income)
+        incomes = self.normalize_income(income)
         resolved = None
         if countries:
             resolved = [self.resolve_country(c) for c in countries]
@@ -1317,9 +1370,10 @@ class GHEDStore:
         if region:
             where.append("c.region = ?")
             params.append(region)
-        if income:
-            where.append("c.income = ?")
-            params.append(income)
+        if incomes:
+            clause, values = self._income_clause(incomes)
+            where.append(f"c.income {clause}")
+            params.extend(values)
         if year_start is not None:
             where.append("o.year >= ?")
             params.append(int(year_start))

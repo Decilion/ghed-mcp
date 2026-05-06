@@ -606,12 +606,42 @@ async def test_unknown_income_lists_available_values():
         await server.list_countries(income="middle-class")
 
 
-async def test_lmic_is_not_aliased_to_lower_middle():
+async def test_lmic_expands_to_collective_low_and_middle_groups():
     # "LMIC" in global health usage means low + middle income countries
-    # collectively, not just lower-middle. The alias map intentionally omits
-    # it so researchers can't silently exclude Low and Upper-middle groups.
-    with pytest.raises(ValueError, match="Available income groups"):
-        await server.list_countries(income="LMIC")
+    # collectively (Low + Lower-middle + Upper-middle), not just
+    # lower-middle. The fixture has 2 Upper-middle and 1 High country, so
+    # income="LMIC" should match the two Upper-middle (no Low/Lower-middle
+    # in the fixture) and exclude the High country.
+    via_lmic = await server.list_countries(income="LMIC")
+    via_canonical = await server.list_countries(income="Upper-middle")
+
+    assert {row["country_code"] for row in via_lmic["items"]} == {
+        row["country_code"] for row in via_canonical["items"]
+    }
+
+
+async def test_mic_expands_to_middle_groups_only():
+    # "MIC" should expand to Lower-middle + Upper-middle and exclude both
+    # Low and High. With the fixture having only Upper-middle and High,
+    # MIC should match the two Upper-middle countries.
+    via_mic = await server.list_countries(income="MIC")
+    via_high = await server.list_countries(income="High")
+
+    assert {row["country_code"] for row in via_mic["items"]} == {"COL", "PER"}
+    assert {row["country_code"] for row in via_high["items"]} == {"USA"}
+
+
+async def test_lmic_filters_out_high_income_in_panels():
+    # Build a research panel for LMIC and confirm USA (High income) is
+    # excluded while COL and PER (Upper-middle) are included.
+    result = await server.build_research_panel(
+        ["che_gdp"],
+        income="LMIC",
+    )
+
+    countries = {row["country_code"] for row in result["rows"]}
+    assert "USA" not in countries
+    assert countries == {"COL", "PER"}
 
 
 async def test_indicator_trend_carries_period_years():

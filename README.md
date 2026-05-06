@@ -23,7 +23,7 @@ A Model Context Protocol (MCP) server that gives AI assistants like Claude direc
 - *"What's the government priority gradient by World Bank income group?"*
 - *"Decompose Peru's current health expenditure by financing scheme for 2023."*
 
-Country names, ISO3 codes, WHO region codes (`AFR`, `AMR`, `EMR`, `EUR`, `SEAR`, `WPR`) and World Bank income labels (`Low`, `Lower-middle`, `Upper-middle`, `High`) are all accepted, with aliases — `region="Americas"` and `income="UMIC"` work the same as the canonical values. CSV export is built in.
+Country names, ISO3 codes, WHO region codes (`AFR`, `AMR`, `EMR`, `EUR`, `SEAR`, `WPR`) and World Bank income labels (`Low`, `Lower-middle`, `Upper-middle`, `High`) are all accepted, with aliases — `region="Americas"` and `income="UMIC"` work the same as the canonical values. Collective aliases match the academic global-health convention: `income="LMIC"` expands to the union of Low + Lower-middle + Upper-middle (not the World Bank's narrower lower-middle-only definition), and `income="MIC"` expands to Lower-middle + Upper-middle. CSV export is built in.
 
 ## Why this exists
 
