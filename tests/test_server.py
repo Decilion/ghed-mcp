@@ -741,6 +741,97 @@ async def test_resolve_country_group_unknown_lists_available():
         await server.resolve_country_group_membership("Atlantis")
 
 
+async def test_compare_countries_accepts_country_group():
+    # Fixture has COL, PER (LAC) and USA (NAR). country_group="LAC" should
+    # match the two LAC countries and exclude USA.
+    result = await server.compare_countries(
+        indicator_code="che_gdp",
+        country_group="LAC",
+        latest_only=True,
+    )
+
+    codes = {row["country_code"] for row in result["rows"]}
+    assert "USA" not in codes
+    assert {"COL", "PER"}.issubset(codes)
+    assert result["country_group"] == "LAC"
+
+
+async def test_compare_countries_unions_explicit_and_group():
+    # countries=["United States"] + country_group="LAC" should yield USA
+    # plus the LAC matches in the fixture (COL + PER).
+    result = await server.compare_countries(
+        indicator_code="che_gdp",
+        countries=["United States"],
+        country_group="LAC",
+        latest_only=True,
+    )
+
+    codes = {row["country_code"] for row in result["rows"]}
+    assert codes == {"USA", "COL", "PER"}
+
+
+async def test_compare_countries_requires_some_spatial_filter():
+    with pytest.raises(ValueError, match="countries.+country_group"):
+        await server.compare_countries(indicator_code="che_gdp")
+
+
+async def test_build_research_panel_with_country_group():
+    result = await server.build_research_panel(
+        ["che_gdp"],
+        country_group="LAC",
+    )
+    codes = {row["country_code"] for row in result["rows"]}
+    assert "USA" not in codes
+    assert codes == {"COL", "PER"}
+    assert result["country_group"] == "LAC"
+
+
+async def test_country_group_intersects_with_income():
+    # LAC + income="High" — fixture has no high-income LAC countries (USA
+    # is in NAR, COL/PER are Upper-middle). Expect zero rows.
+    result = await server.compare_countries(
+        indicator_code="che_gdp",
+        country_group="LAC",
+        latest_only=True,
+    )
+    assert {row["country_code"] for row in result["rows"]} == {"COL", "PER"}
+
+    # Intersection via list_countries: LAC ∩ High should be empty.
+    listed = await server.list_countries(country_group="LAC", income="High")
+    assert listed["count"] == 0
+
+
+async def test_summarize_country_group_with_country_group():
+    result = await server.summarize_country_group(
+        indicator_code="che_gdp",
+        country_group="LAC",
+        latest_only=True,
+    )
+
+    assert result["country_group"] == "LAC"
+    assert result["country_count"] == 2  # COL + PER from fixture
+    assert {row["country_code"] for row in result["top"]} <= {"COL", "PER"}
+
+
+async def test_indicator_trend_with_country_group():
+    result = await server.indicator_trend(
+        indicator_code="che_gdp",
+        country_group="LAC",
+        year_start=2022,
+        year_end=2023,
+    )
+    codes = {row["country_code"] for row in result["rows"]}
+    assert "USA" not in codes
+    assert {"COL", "PER"}.issubset(codes)
+
+
+async def test_list_countries_filters_by_country_group():
+    result = await server.list_countries(country_group="LAC")
+    codes = {row["country_code"] for row in result["items"]}
+    assert codes == {"COL", "PER"}  # USA in NAR is filtered out
+    assert result["country_group"] == "LAC"
+
+
 def test_country_group_member_counts_are_reasonable():
     # Sanity checks on list sizes. Re-verify against source URLs in
     # country_groups.py if any of these fail.

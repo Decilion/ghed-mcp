@@ -1277,19 +1277,26 @@ class GHEDStore:
         self,
         indicator_code: str,
         *,
+        countries: Iterable[str] | None = None,
         region: str | None = None,
         income: str | None = None,
         year: int | None = None,
         latest_only: bool = True,
         top_n: int = 5,
     ) -> dict[str, Any]:
-        if not region and not income:
-            raise ValueError("Pass at least one of 'region' or 'income'.")
+        if not countries and not region and not income:
+            raise ValueError(
+                "Pass at least one of 'countries', 'region', or 'income'."
+            )
+        common = dict(
+            countries=list(countries) if countries else None,
+            region=region,
+            income=income,
+        )
         if year is not None:
             rows = self.indicator_data(
                 indicator_code,
-                region=region,
-                income=income,
+                **common,
                 year_start=year,
                 year_end=year,
                 latest_only=False,
@@ -1298,8 +1305,7 @@ class GHEDStore:
         else:
             rows = self.indicator_data(
                 indicator_code,
-                region=region,
-                income=income,
+                **common,
                 latest_only=latest_only,
                 top=10000,
             )
@@ -1313,6 +1319,11 @@ class GHEDStore:
         )
         years = sorted({row["year"] for row in rows if row.get("year") is not None})
         countries_in_group = self.countries(region=region, income=income)
+        if countries:
+            country_set = {self.resolve_country(c) for c in countries}
+            countries_in_group = [
+                c for c in countries_in_group if c["country_code"] in country_set
+            ]
         covered = {row["country_code"] for row in rows}
         return {
             "indicator": self.get_indicator(indicator_code),

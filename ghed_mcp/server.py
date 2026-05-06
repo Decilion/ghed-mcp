@@ -23,6 +23,52 @@ from .country_groups import (
     all_groups,
     resolve_country_group,
 )
+
+
+async def _merge_countries(
+    *,
+    country: str | None = None,
+    countries: list[str] | None = None,
+    country_group: str | None = None,
+) -> list[str] | None:
+    """Combine explicit country / countries with a curated country_group.
+
+    User-supplied `country` / `countries` pass through as-is (the store
+    layer strict-resolves them, raising on typos). `country_group` members
+    are soft-resolved against the workbook here — ISO3 codes the workbook
+    doesn't have are silently dropped, because curated groups
+    deliberately span more economies than GHED publishes (e.g.
+    LAC_TERRITORIES includes Aruba and Curaçao, which aren't in GHED).
+
+    Returns the union (deduplicated, order-preserving), or None when no
+    spatial filter was supplied. User-supplied entries keep their original
+    spelling so that downstream displays like `countries_resolved` can
+    show the input → ISO3 mapping. Curated-group entries are pre-resolved
+    to ISO3.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _add(value: str) -> None:
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+
+    if country:
+        _add(country)
+    if countries:
+        for c in countries:
+            _add(c)
+    if country_group:
+        store = await get_store()
+        members = resolve_country_group(country_group)["members"]
+        for c in members:
+            try:
+                code = store.resolve_country(c)
+            except ValueError:
+                continue
+            _add(code)
+    return out or None
 from .methodology import (
     RESEARCH_USE_CASES,
     TOPICS,
@@ -260,13 +306,23 @@ async def search_variables(
 async def list_countries(
     region: str | None = None,
     income: str | None = None,
+    country_group: str | None = None,
 ) -> dict[str, Any]:
-    """List countries and territories available in GHED, optionally by group."""
+    """List countries and territories available in GHED, optionally by group.
+
+    `country_group` accepts curated codes (LAC, OECD, LDC, SSA, …) and
+    intersects with `region` / `income` when more than one is set, so
+    `country_group="LAC", income="High"` returns LAC HICs.
+    """
     store = await get_store()
     items = store.countries(region=region, income=income)
+    if country_group:
+        members = set(resolve_country_group(country_group)["members"])
+        items = [c for c in items if c["country_code"] in members]
     return {
         "region": region,
         "income": income,
+        "country_group": country_group,
         "count": len(items),
         "items": items,
     }
@@ -354,6 +410,7 @@ async def get_country_metadata(
 async def data_availability(
     indicator_codes: list[str],
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -362,10 +419,13 @@ async def data_availability(
     """Summarize availability for indicators before building a research panel."""
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
+    merged_countries = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
     store = await get_store()
     rows = store.data_availability(
         indicator_codes,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -374,6 +434,7 @@ async def data_availability(
     return {
         "indicator_codes": indicator_codes,
         "countries": countries,
+        "country_group": country_group,
         "region": region,
         "income": income,
         "year_start": year_start,
@@ -428,6 +489,7 @@ async def build_additive_breakdown(
 async def build_research_panel(
     indicator_codes: list[str],
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -435,17 +497,25 @@ async def build_research_panel(
     top: int = 10000,
     format: str = "rows",
 ) -> dict[str, Any]:
-    """Build a tidy long panel for multiple GHED variables across countries and years."""
+    """Build a tidy long panel for multiple GHED variables across countries and years.
+
+    `country_group` accepts curated codes ("LAC", "OECD", "LDC", "SSA", …)
+    that resolve to ISO3 lists; combine freely with `countries`, `region`,
+    and `income` (filters apply via SQL AND).
+    """
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
     fmt = format.lower()
     if fmt not in ("rows", "csv"):
         raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
     top = max(1, min(top, 100000))
+    merged_countries = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
     store = await get_store()
     rows = store.research_panel(
         indicator_codes,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -455,6 +525,7 @@ async def build_research_panel(
     result: dict[str, Any] = {
         "indicator_codes": indicator_codes,
         "countries": countries,
+        "country_group": country_group,
         "region": region,
         "income": income,
         "year_start": year_start,
@@ -483,6 +554,7 @@ async def build_research_panel(
 async def build_research_package(
     indicator_codes: list[str],
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -493,10 +565,13 @@ async def build_research_package(
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
     top = max(1, min(top, 200000))
+    merged_countries = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
     store = await get_store()
     rows = store.research_panel(
         indicator_codes,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -509,7 +584,7 @@ async def build_research_package(
     ]
     availability = store.data_availability(
         indicator_codes,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -521,6 +596,7 @@ async def build_research_package(
         params={
             "indicator_codes": indicator_codes,
             "countries": countries,
+            "country_group": country_group,
             "region": region,
             "income": income,
             "year_start": year_start,
@@ -539,7 +615,8 @@ async def build_research_package(
         "# GHED Research Extract",
         "",
         f"Indicators: {', '.join(indicator_codes)}",
-        f"Countries: {', '.join(countries or []) if countries else 'Filtered by region/income or all countries'}",
+        f"Countries: {', '.join(countries or []) if countries else 'Filtered by region/income/country_group or all countries'}",
+        f"Country group: {country_group or 'None'}",
         f"Region: {region or 'Any'}",
         f"Income: {income or 'Any'}",
         f"Years: {year_start or 'earliest'} to {year_end or 'latest'}",
@@ -557,6 +634,7 @@ async def build_research_package(
         "source": source,
         "indicator_codes": indicator_codes,
         "countries": countries,
+        "country_group": country_group,
         "region": region,
         "income": income,
         "year_start": year_start,
@@ -575,6 +653,8 @@ async def build_research_package(
 async def get_indicator_data(
     indicator_code: str,
     country: str | None = None,
+    countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -582,13 +662,20 @@ async def get_indicator_data(
     latest_only: bool = False,
     top: int = 1000,
 ) -> dict[str, Any]:
-    """Fetch one GHED indicator with optional country and year filters."""
+    """Fetch one GHED indicator with optional country and year filters.
+
+    Spatial filters compose: `country` (singular), `countries` (list), and
+    `country_group` (curated, e.g. "LAC") merge into a single country list,
+    and `region` / `income` further constrain via SQL AND.
+    """
     top = max(1, min(top, 5000))
+    merged_countries = await _merge_countries(
+        country=country, countries=countries, country_group=country_group
+    )
     store = await get_store()
-    countries = [country] if country else None
     rows = store.indicator_data(
         indicator_code,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -604,6 +691,8 @@ async def get_indicator_data(
             params={
                 "indicator_code": indicator_code,
                 "country": country,
+                "countries": countries,
+                "country_group": country_group,
                 "region": region,
                 "income": income,
                 "year_start": year_start,
@@ -633,23 +722,34 @@ async def get_indicator_data(
 @mcp.tool(annotations=READ_TOOL)
 async def compare_countries(
     indicator_code: str,
-    countries: list[str],
+    countries: list[str] | None = None,
+    country_group: str | None = None,
     year_start: int | None = None,
     year_end: int | None = None,
     latest_only: bool = False,
     top: int = 5000,
     format: str = "rows",
 ) -> dict[str, Any]:
-    """One GHED indicator across countries, returned as tidy rows or CSV."""
-    if not countries:
-        raise ValueError("countries must be a non-empty list of names or ISO3 codes.")
+    """One GHED indicator across countries, returned as tidy rows or CSV.
+
+    Pass either an explicit `countries` list or a curated `country_group`
+    (e.g. "LAC", "OECD", "LDC", "SSA") — or both, in which case they are
+    merged. See list_curated_country_groups for available groups.
+    """
+    merged = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
+    if not merged:
+        raise ValueError(
+            "Pass at least one of 'countries' or 'country_group'."
+        )
     fmt = format.lower()
     if fmt not in ("rows", "csv"):
         raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
     top = max(1, min(top, 10000))
 
     store = await get_store()
-    resolved = [{"input": c, "code": store.resolve_country(c)} for c in countries]
+    resolved = [{"input": c, "code": store.resolve_country(c)} for c in merged]
     rows = store.indicator_data(
         indicator_code,
         countries=[r["code"] for r in resolved],
@@ -660,6 +760,7 @@ async def compare_countries(
     )
     result: dict[str, Any] = {
         "indicator_code": indicator_code,
+        "country_group": country_group,
         "countries_resolved": resolved,
         "source": provenance(
             workbook=store.path,
@@ -667,6 +768,7 @@ async def compare_countries(
             params={
                 "indicator_code": indicator_code,
                 "countries": countries,
+                "country_group": country_group,
                 "year_start": year_start,
                 "year_end": year_end,
                 "latest_only": latest_only,
@@ -698,6 +800,7 @@ async def compare_countries(
 @mcp.tool(annotations=READ_TOOL)
 async def compare_country_group(
     indicator_code: str,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -706,18 +809,33 @@ async def compare_country_group(
     top: int = 5000,
     format: str = "rows",
 ) -> dict[str, Any]:
-    """Compare one GHED indicator for countries matching a region and/or income group."""
-    if not region and not income:
-        raise ValueError("Pass at least one of 'region' or 'income'.")
+    """Compare one GHED indicator across a country group (curated, regional, or income-based).
+
+    Pass at least one of `country_group` (e.g. "LAC", "OECD", "LDC"),
+    `region`, or `income`. Multiple filters compose via SQL AND, so
+    `country_group="LAC", income="High"` returns LAC HICs.
+    """
+    if not country_group and not region and not income:
+        raise ValueError(
+            "Pass at least one of 'country_group', 'region', or 'income'."
+        )
     fmt = format.lower()
     if fmt not in ("rows", "csv"):
         raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
     top = max(1, min(top, 10000))
 
+    merged_countries = await _merge_countries(country_group=country_group)
     store = await get_store()
+    if merged_countries:
+        # Resolve to ISO3 first so the country list passed to the store
+        # accepts both names and codes uniformly.
+        merged_countries = [store.resolve_country(c) for c in merged_countries]
     countries = store.countries(region=region, income=income)
+    if merged_countries:
+        countries = [c for c in countries if c["country_code"] in set(merged_countries)]
     rows = store.indicator_data(
         indicator_code,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -727,6 +845,7 @@ async def compare_country_group(
     )
     result: dict[str, Any] = {
         "indicator_code": indicator_code,
+        "country_group": country_group,
         "region": region,
         "income": income,
         "country_count": len(countries),
@@ -736,6 +855,7 @@ async def compare_country_group(
             operation="compare_country_group",
             params={
                 "indicator_code": indicator_code,
+                "country_group": country_group,
                 "region": region,
                 "income": income,
                 "year_start": year_start,
@@ -769,28 +889,41 @@ async def compare_country_group(
 @mcp.tool(annotations=READ_TOOL)
 async def summarize_country_group(
     indicator_code: str,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year: int | None = None,
     latest_only: bool = True,
     top_n: int = 5,
 ) -> dict[str, Any]:
-    """Summarize an indicator within a GHED region/income group."""
+    """Summarize an indicator within a country group (curated, regional, or income).
+
+    Pass at least one of `country_group` ("LAC", "OECD", "LDC", …),
+    `region`, or `income`.
+    """
+    if not country_group and not region and not income:
+        raise ValueError(
+            "Pass at least one of 'country_group', 'region', or 'income'."
+        )
     top_n = max(1, min(top_n, 25))
+    merged_countries = await _merge_countries(country_group=country_group)
     store = await get_store()
     result = store.group_summary(
         indicator_code,
+        countries=merged_countries,
         region=region,
         income=income,
         year=year,
         latest_only=latest_only,
         top_n=top_n,
     )
+    result["country_group"] = country_group
     result["source"] = provenance(
         workbook=store.path,
         operation="summarize_country_group",
         params={
             "indicator_code": indicator_code,
+            "country_group": country_group,
             "region": region,
             "income": income,
             "year": year,
@@ -829,6 +962,7 @@ def _period_warning(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 async def indicator_trend(
     indicator_code: str,
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -839,10 +973,13 @@ async def indicator_trend(
 ) -> dict[str, Any]:
     """Compute country-level first/latest trends for one GHED indicator."""
     top = max(1, min(top, 5000))
+    merged_countries = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
     store = await get_store()
     rows = store.indicator_trends(
         indicator_code,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -854,6 +991,7 @@ async def indicator_trend(
     result: dict[str, Any] = {
         "indicator_code": indicator_code,
         "countries": countries,
+        "country_group": country_group,
         "region": region,
         "income": income,
         "year_start": year_start,
@@ -888,6 +1026,7 @@ async def indicator_trend(
 async def compare_trends(
     indicator_codes: list[str],
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -898,12 +1037,15 @@ async def compare_trends(
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
     top_per_indicator = max(1, min(top_per_indicator, 5000))
+    merged_countries = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
     store = await get_store()
     items = []
     for indicator_code in indicator_codes:
         rows = store.indicator_trends(
             indicator_code,
-            countries=countries,
+            countries=merged_countries,
             region=region,
             income=income,
             year_start=year_start,
@@ -919,6 +1061,7 @@ async def compare_trends(
     return {
         "indicator_codes": indicator_codes,
         "countries": countries,
+        "country_group": country_group,
         "region": region,
         "income": income,
         "year_start": year_start,
@@ -931,6 +1074,7 @@ async def compare_trends(
 async def rank_country_changes(
     indicator_code: str,
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -945,10 +1089,13 @@ async def rank_country_changes(
     if metric not in ("absolute_change", "percent_change", "cagr"):
         raise ValueError("metric must be one of absolute_change, percent_change, or cagr.")
     top = max(1, min(top, 200))
+    merged_countries = await _merge_countries(
+        countries=countries, country_group=country_group
+    )
     store = await get_store()
     rows = store.indicator_trends(
         indicator_code,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
@@ -965,6 +1112,7 @@ async def rank_country_changes(
     )[:top]
     result: dict[str, Any] = {
         "indicator_code": indicator_code,
+        "country_group": country_group,
         "metric": metric,
         "descending": descending,
         "min_year_count": min_year_count,
@@ -983,6 +1131,7 @@ async def assess_data_quality(
     indicator_code: str,
     country: str | None = None,
     countries: list[str] | None = None,
+    country_group: str | None = None,
     region: str | None = None,
     income: str | None = None,
     year_start: int | None = None,
@@ -991,17 +1140,20 @@ async def assess_data_quality(
 ) -> dict[str, Any]:
     """Summarize metadata, availability, and cautions for an indicator/filter."""
     top = max(1, min(top, 100))
+    merged_countries = await _merge_countries(
+        country=country, countries=countries, country_group=country_group
+    )
     store = await get_store()
     result = store.quality_assessment(
         indicator_code,
-        country=country,
-        countries=countries,
+        countries=merged_countries,
         region=region,
         income=income,
         year_start=year_start,
         year_end=year_end,
         top=top,
     )
+    result["country_group"] = country_group
     result["source"] = provenance(
         workbook=store.path,
         operation="assess_data_quality",
@@ -1009,6 +1161,7 @@ async def assess_data_quality(
             "indicator_code": indicator_code,
             "country": country,
             "countries": countries,
+            "country_group": country_group,
             "region": region,
             "income": income,
             "year_start": year_start,
