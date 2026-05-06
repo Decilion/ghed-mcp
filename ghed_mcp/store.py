@@ -101,18 +101,20 @@ INCOME_ALIASES: dict[str, str] = {
     "LOWER MIDDLE": "Lower-middle",
     "LOWER MIDDLE INCOME": "Lower-middle",
     "LOWER MIDDLE INCOME COUNTRIES": "Lower-middle",
-    "LMIC": "Lower-middle",
-    "LMC": "Lower-middle",
     "UPPER MIDDLE": "Upper-middle",
     "UPPER MIDDLE INCOME": "Upper-middle",
     "UPPER MIDDLE INCOME COUNTRIES": "Upper-middle",
     "UMIC": "Upper-middle",
-    "UMC": "Upper-middle",
     "HIGH": "High",
     "HIGH INCOME": "High",
     "HIGH INCOME COUNTRIES": "High",
     "HIC": "High",
 }
+# Note: "LMIC" and "LMC" are intentionally NOT mapped. In global health
+# usage, "LMICs" usually means low- AND middle-income countries collectively
+# (Low + Lower-middle + Upper-middle), not just lower-middle. Mapping them
+# would silently exclude the other groups from researcher queries. To get
+# LMIC-collective behavior, query the three groups separately.
 
 
 def _norm_group_key(value: str) -> str:

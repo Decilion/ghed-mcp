@@ -34,8 +34,12 @@ ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 
 mcp = FastMCP("ghed")
 
-READ_LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
-READ_EXTERNAL = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+# Read tools use openWorldHint=True because any of them may transparently
+# trigger a workbook download on a cold cache (ensure_workbook downloads
+# from WHO and writes the derived SQLite cache). readOnlyHint=True still
+# applies: from the user's perspective these tools only return data, and
+# the cache write is an idempotent implementation detail.
+READ_TOOL = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 WRITE_EXTERNAL = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -72,7 +76,7 @@ async def refresh_cache() -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def cache_status() -> dict[str, Any]:
     """Return local workbook and derived SQLite cache status."""
     store = await get_store()
@@ -84,7 +88,7 @@ async def cache_status() -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_EXTERNAL)
+@mcp.tool(annotations=READ_TOOL)
 async def check_for_updates() -> dict[str, Any]:
     """Compare the local cache source document with the current GHED all-data file."""
     latest = normalize_source_document(await get_latest_all_data_document())
@@ -100,7 +104,7 @@ async def check_for_updates() -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def version() -> dict[str, Any]:
     """Return workbook version lines and cache provenance."""
     store = await get_store()
@@ -114,7 +118,7 @@ async def version() -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def methodology_guide() -> dict[str, Any]:
     """Explain how GHED variables are organized and how to choose the right series."""
     store = await get_store()
@@ -125,32 +129,32 @@ async def methodology_guide() -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def topics_index() -> dict[str, Any]:
     """Curated GHED topic index mapping common user requests to variable codes."""
     return topic_index()
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def research_use_cases() -> dict[str, Any]:
     """Research patterns seen in GHED-using literature, with recommended variables."""
     return get_research_use_cases()
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def suggest_variables_for_research_question(question: str) -> dict[str, Any]:
     """Map a natural-language research question to likely GHED variables and cautions."""
     return suggest_use_cases(question)
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def list_variable_categories() -> dict[str, Any]:
     """List GHED variable category counts from the Codebook."""
     store = await get_store()
     return store.indicator_categories()
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
     """List headline GHED indicators only (category_1 = INDICATORS)."""
     top = max(1, min(top, 200))
@@ -168,7 +172,7 @@ async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def list_variables(
     category_1: str | None = None,
     category_2: str | None = None,
@@ -197,7 +201,7 @@ async def list_variables(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def search_indicators(
     query: str,
     top: int = 50,
@@ -222,7 +226,7 @@ async def search_indicators(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def search_variables(
     query: str,
     top: int = 50,
@@ -247,7 +251,7 @@ async def search_variables(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def list_countries(
     region: str | None = None,
     income: str | None = None,
@@ -263,14 +267,14 @@ async def list_countries(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def list_country_groups() -> dict[str, Any]:
     """List GHED country grouping values by region and World Bank income class."""
     store = await get_store()
     return store.country_groups()
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def find_country_code(
     country: str | None = None,
     country_name: str | None = None,
@@ -286,7 +290,7 @@ async def find_country_code(
     return {"query": query, "count": len(matches), "matches": matches}
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def get_indicator_metadata(indicator_code: str) -> dict[str, Any]:
     """Return Codebook metadata for one GHED indicator."""
     store = await get_store()
@@ -296,7 +300,7 @@ async def get_indicator_metadata(indicator_code: str) -> dict[str, Any]:
     return {"indicator_code": indicator_code, "found": True, "metadata": metadata}
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def get_country_metadata(
     country: str | None = None,
     indicator_code: str | None = None,
@@ -314,7 +318,7 @@ async def get_country_metadata(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def data_availability(
     indicator_codes: list[str],
     countries: list[str] | None = None,
@@ -347,7 +351,7 @@ async def data_availability(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
     """Return known additive child relationships for a GHED variable."""
     store = await get_store()
@@ -364,14 +368,14 @@ async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def explain_indicator_relationship(indicator_code: str) -> dict[str, Any]:
     """Explain whether a variable is a total, component, ratio/share, or context series."""
     store = await get_store()
     return store.explain_relationship(indicator_code)
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def build_additive_breakdown(
     indicator_code: str,
     country: str,
@@ -388,7 +392,7 @@ async def build_additive_breakdown(
     )
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def build_research_panel(
     indicator_codes: list[str],
     countries: list[str] | None = None,
@@ -443,7 +447,7 @@ async def build_research_panel(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def build_research_package(
     indicator_codes: list[str],
     countries: list[str] | None = None,
@@ -535,7 +539,7 @@ async def build_research_package(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def get_indicator_data(
     indicator_code: str,
     country: str | None = None,
@@ -594,7 +598,7 @@ async def get_indicator_data(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def compare_countries(
     indicator_code: str,
     countries: list[str],
@@ -659,7 +663,7 @@ async def compare_countries(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def compare_country_group(
     indicator_code: str,
     region: str | None = None,
@@ -730,7 +734,7 @@ async def compare_country_group(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def summarize_country_group(
     indicator_code: str,
     region: str | None = None,
@@ -789,7 +793,7 @@ def _period_warning(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def indicator_trend(
     indicator_code: str,
     countries: list[str] | None = None,
@@ -848,7 +852,7 @@ async def indicator_trend(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def compare_trends(
     indicator_codes: list[str],
     countries: list[str] | None = None,
@@ -891,7 +895,7 @@ async def compare_trends(
     }
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def rank_country_changes(
     indicator_code: str,
     countries: list[str] | None = None,
@@ -942,7 +946,7 @@ async def rank_country_changes(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def assess_data_quality(
     indicator_code: str,
     country: str | None = None,
@@ -983,7 +987,7 @@ async def assess_data_quality(
     return result
 
 
-@mcp.tool(annotations=READ_LOCAL)
+@mcp.tool(annotations=READ_TOOL)
 async def country_profile(
     country: str,
     year: int | None = None,

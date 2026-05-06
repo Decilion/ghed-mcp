@@ -606,6 +606,14 @@ async def test_unknown_income_lists_available_values():
         await server.list_countries(income="middle-class")
 
 
+async def test_lmic_is_not_aliased_to_lower_middle():
+    # "LMIC" in global health usage means low + middle income countries
+    # collectively, not just lower-middle. The alias map intentionally omits
+    # it so researchers can't silently exclude Low and Upper-middle groups.
+    with pytest.raises(ValueError, match="Available income groups"):
+        await server.list_countries(income="LMIC")
+
+
 async def test_indicator_trend_carries_period_years():
     trend = await server.indicator_trend(
         "che_gdp",
