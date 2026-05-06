@@ -18,6 +18,11 @@ from .client import (
     provenance,
     read_source_manifest,
 )
+from .country_groups import (
+    LAST_VERIFIED as COUNTRY_GROUPS_LAST_VERIFIED,
+    all_groups,
+    resolve_country_group,
+)
 from .methodology import (
     RESEARCH_USE_CASES,
     TOPICS,
@@ -272,6 +277,33 @@ async def list_country_groups() -> dict[str, Any]:
     """List GHED country grouping values by region and World Bank income class."""
     store = await get_store()
     return store.country_groups()
+
+
+@mcp.tool(annotations=READ_TOOL)
+async def list_curated_country_groups() -> dict[str, Any]:
+    """List Decilion's curated country groupings (WB regions, LDCs, OECD).
+
+    Returns groups beyond GHED's built-in WHO regions and World Bank income
+    classes — World Bank geographic regions, the UN Least Developed Countries
+    list, and OECD membership. Use the returned `members` lists with the
+    `countries` parameter on data tools, or pass the group code to
+    `resolve_country_group_membership` to get just the ISO3 list.
+    """
+    return {
+        "last_verified": COUNTRY_GROUPS_LAST_VERIFIED,
+        "groups": all_groups(),
+    }
+
+
+@mcp.tool(annotations=READ_TOOL)
+async def resolve_country_group_membership(group: str) -> dict[str, Any]:
+    """Resolve a curated group code to its ISO3 member list.
+
+    Accepts canonical codes (LAC, SSA, LDC, OECD, …), official WB region
+    codes (LCN, SSF, …), and common spellings ("Latin America and Caribbean",
+    "Sub-Saharan Africa", "Least Developed Countries").
+    """
+    return resolve_country_group(group)
 
 
 @mcp.tool(annotations=READ_TOOL)

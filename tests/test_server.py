@@ -669,6 +669,99 @@ async def test_rank_country_changes_filters_by_min_year_count():
     assert {row["country_code"] for row in ranked["rows"]} == {"COL"}
 
 
+async def test_list_curated_country_groups_has_expected_keys():
+    result = await server.list_curated_country_groups()
+
+    assert set(result["groups"]) == {
+        "EAP", "ECA", "LAC", "LAC_TERRITORIES",
+        "MENA", "MENA_EXCL_ISR_MLT",
+        "NAR", "SAS", "SSA", "LDC", "OECD",
+    }
+    assert result["groups"]["LAC"]["kind"] == "wb_region"
+    assert result["groups"]["LDC"]["kind"] == "un_designation"
+    assert result["groups"]["OECD"]["kind"] == "membership"
+    # Spot check expected memberships.
+    assert "COL" in result["groups"]["LAC"]["members"]
+    assert "USA" not in result["groups"]["LAC"]["members"]  # US is in NAR
+    assert "USA" in result["groups"]["NAR"]["members"]
+    assert "USA" in result["groups"]["OECD"]["members"]
+    assert "HTI" in result["groups"]["LDC"]["members"]
+
+
+async def test_lac_is_33_sovereign_states():
+    result = await server.resolve_country_group_membership("LAC")
+
+    assert len(result["members"]) == 33
+    # Sovereign states are in.
+    for code in ["COL", "PER", "BRA", "MEX", "ARG", "HTI", "CUB", "JAM"]:
+        assert code in result["members"]
+    # Territories and dependencies are NOT in 33-state LAC.
+    for code in ["ABW", "PRI", "CYM", "CUW", "VIR", "VGB", "TCA", "MAF", "SXM"]:
+        assert code not in result["members"]
+
+
+async def test_lac_territories_is_42_with_dependencies():
+    result = await server.resolve_country_group_membership("LAC_TERRITORIES")
+
+    assert len(result["members"]) == 42
+    # Territories ARE in this variant.
+    for code in ["ABW", "PRI", "CYM", "CUW", "VIR"]:
+        assert code in result["members"]
+    # And so are all 33 sovereign states.
+    sovereign = await server.resolve_country_group_membership("LAC")
+    assert set(sovereign["members"]).issubset(set(result["members"]))
+
+
+async def test_mena_excl_isr_mlt_drops_two_countries():
+    full = await server.resolve_country_group_membership("MENA")
+    excl = await server.resolve_country_group_membership("MENA_EXCL_ISR_MLT")
+
+    assert "ISR" in full["members"] and "MLT" in full["members"]
+    assert "ISR" not in excl["members"] and "MLT" not in excl["members"]
+    assert len(full["members"]) - len(excl["members"]) == 2
+
+
+async def test_resolve_country_group_accepts_aliases():
+    via_code = await server.resolve_country_group_membership("LAC")
+    via_natural = await server.resolve_country_group_membership(
+        "Latin America and Caribbean"
+    )
+    via_wb_code = await server.resolve_country_group_membership("LCN")
+
+    # "LAC" and natural language map to the 33-sovereign list.
+    assert via_code["members"] == via_natural["members"]
+    # "LCN" (the WB region code) maps to the 42-economy territory-inclusive
+    # list to match WB tables.
+    assert via_wb_code["code"] == "LAC_TERRITORIES"
+    assert len(via_wb_code["members"]) == 42
+
+
+async def test_resolve_country_group_unknown_lists_available():
+    with pytest.raises(ValueError, match="Available:"):
+        await server.resolve_country_group_membership("Atlantis")
+
+
+def test_country_group_member_counts_are_reasonable():
+    # Sanity checks on list sizes. Re-verify against source URLs in
+    # country_groups.py if any of these fail.
+    from ghed_mcp.country_groups import all_groups
+
+    groups = all_groups()
+    assert 30 <= groups["EAP"]["member_count"] <= 45
+    assert 50 <= groups["ECA"]["member_count"] <= 65
+    assert groups["LAC"]["member_count"] == 33
+    assert groups["LAC_TERRITORIES"]["member_count"] == 42
+    assert groups["MENA"]["member_count"] == 21
+    assert groups["MENA_EXCL_ISR_MLT"]["member_count"] == 19
+    assert groups["NAR"]["member_count"] == 3
+    assert groups["SAS"]["member_count"] == 8
+    assert 45 <= groups["SSA"]["member_count"] <= 50
+    # LDC: 44 verified 2026-05-05 (post-São Tomé Dec 2024 graduation).
+    assert groups["LDC"]["member_count"] == 44
+    # OECD: 38 verified 2026-05-05 (Costa Rica is the most recent member).
+    assert groups["OECD"]["member_count"] == 38
+
+
 def test_normalize_source_document():
     doc = normalize_source_document({
         "Identifier": 64396441,
