@@ -712,6 +712,23 @@ async def test_lac_territories_is_42_with_dependencies():
     assert set(sovereign["members"]).issubset(set(result["members"]))
 
 
+async def test_mena_includes_afg_pak_in_fy2026():
+    # WB FY2026 renamed the old "Middle East & North Africa" to "Middle
+    # East, North Africa, Afghanistan and Pakistan" and moved AFG/PAK in
+    # from South Asia. The MENA alias points at the new 23-economy region.
+    result = await server.resolve_country_group_membership("MENA")
+    assert "AFG" in result["members"]
+    assert "PAK" in result["members"]
+    assert len(result["members"]) == 23
+
+
+async def test_sas_no_longer_includes_afg_pak_in_fy2026():
+    result = await server.resolve_country_group_membership("SAS")
+    assert "AFG" not in result["members"]
+    assert "PAK" not in result["members"]
+    assert len(result["members"]) == 6
+
+
 async def test_mena_excl_isr_mlt_drops_two_countries():
     full = await server.resolve_country_group_membership("MENA")
     excl = await server.resolve_country_group_membership("MENA_EXCL_ISR_MLT")
@@ -838,18 +855,19 @@ def test_country_group_member_counts_are_reasonable():
     from ghed_mcp.country_groups import all_groups
 
     groups = all_groups()
-    assert 30 <= groups["EAP"]["member_count"] <= 45
-    assert 50 <= groups["ECA"]["member_count"] <= 65
+    # WB FY2026 counts (re-verified 2026-05-06).
+    assert groups["EAP"]["member_count"] == 38
+    assert groups["ECA"]["member_count"] == 58
     assert groups["LAC"]["member_count"] == 33
     assert groups["LAC_TERRITORIES"]["member_count"] == 42
-    assert groups["MENA"]["member_count"] == 21
-    assert groups["MENA_EXCL_ISR_MLT"]["member_count"] == 19
+    assert groups["MENA"]["member_count"] == 23
+    assert groups["MENA_EXCL_ISR_MLT"]["member_count"] == 21
     assert groups["NAR"]["member_count"] == 3
-    assert groups["SAS"]["member_count"] == 8
-    assert 45 <= groups["SSA"]["member_count"] <= 50
-    # LDC: 44 verified 2026-05-05 (post-São Tomé Dec 2024 graduation).
+    assert groups["SAS"]["member_count"] == 6
+    assert groups["SSA"]["member_count"] == 48
+    # LDC: 44 verified 2026-05-06 (post-São Tomé Dec 2024 graduation).
     assert groups["LDC"]["member_count"] == 44
-    # OECD: 38 verified 2026-05-05 (Costa Rica is the most recent member).
+    # OECD: 38 verified 2026-05-06 (Costa Rica is the most recent member).
     assert groups["OECD"]["member_count"] == 38
 
 

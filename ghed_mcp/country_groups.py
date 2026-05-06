@@ -22,8 +22,14 @@ import re
 import unicodedata
 from typing import Any
 
-LAST_VERIFIED = "2026-05-05"
-# 2026-05-05 verification notes:
+LAST_VERIFIED = "2026-05-06"
+# 2026-05-06 verification notes:
+# - WB regions match WB FY2026 classification (effective July 2025).
+#   The big restructuring vs prior classifications: WB renamed the old
+#   "Middle East & North Africa" region to "Middle East, North Africa,
+#   Afghanistan and Pakistan" and moved AFG and PAK out of South Asia.
+#   We keep the alias `MENA` for the new 23-economy WB region; SAS
+#   drops to 6.
 # - LDC list (44) cross-checked against UN DESA / Wikipedia. Reflects
 #   Bhutan (graduated Dec 2023) and São Tomé and Príncipe (Dec 2024)
 #   graduations. Bangladesh, Lao PDR, and Nepal are scheduled to
@@ -32,10 +38,9 @@ LAST_VERIFIED = "2026-05-05"
 #   recent confirmed member. Argentina, Brazil, Bulgaria, Croatia, Peru,
 #   and Romania are in accession negotiations; verify completion before
 #   moving them into OECD["members"].
-# - WB regions cross-checked against the World Bank country and lending
-#   groups page. LAC is the 33-sovereign-state convention; use
-#   LAC_TERRITORIES for the WB 42-economy region (includes Aruba,
-#   Cayman Islands, Curaçao, Puerto Rico, etc.).
+# - LAC is the 33-sovereign-state convention; use LAC_TERRITORIES for
+#   the WB 42-economy region (includes Aruba, Cayman Islands, Curaçao,
+#   Puerto Rico, etc.).
 
 # ---------------------------------------------------------------------------
 # World Bank geographic regions (7)
@@ -45,12 +50,12 @@ LAST_VERIFIED = "2026-05-05"
 
 WB_REGIONS: dict[str, dict[str, Any]] = {
     "EAP": {
-        "name": "East Asia & Pacific",
+        "name": "East Asia & Pacific (WB FY2026)",
         "wb_code": "EAS",
         "members": [
-            "ASM", "AUS", "BRN", "KHM", "CHN", "COK", "FJI", "PYF", "GUM",
+            "ASM", "AUS", "BRN", "KHM", "CHN", "FJI", "PYF", "GUM",
             "HKG", "IDN", "JPN", "KIR", "PRK", "KOR", "LAO", "MAC", "MYS",
-            "MHL", "FSM", "MNG", "MMR", "NRU", "NCL", "NZL", "NIU", "MNP",
+            "MHL", "FSM", "MNG", "MMR", "NRU", "NCL", "NZL", "MNP",
             "PLW", "PNG", "PHL", "WSM", "SGP", "SLB", "TWN", "THA", "TLS",
             "TON", "TUV", "VUT", "VNM",
         ],
@@ -97,23 +102,32 @@ WB_REGIONS: dict[str, dict[str, Any]] = {
         ],
     },
     "MENA": {
-        "name": "Middle East & North Africa (WB definition)",
+        # WB FY2026 renamed this region to "Middle East, North Africa,
+        # Afghanistan and Pakistan" and moved AFG and PAK in from South
+        # Asia (23 economies). We keep the `MENA` alias because that's
+        # the name health-financing literature uses; the new "MENAAP"
+        # naming hasn't widely propagated yet.
+        "name": "Middle East, North Africa, Afghanistan and Pakistan (WB FY2026)",
         "wb_code": "MEA",
         "members": [
-            "DZA", "BHR", "DJI", "EGY", "IRN", "IRQ", "ISR", "JOR", "KWT",
-            "LBN", "LBY", "MLT", "MAR", "OMN", "PSE", "QAT", "SAU", "SYR",
-            "TUN", "ARE", "YEM",
+            "AFG", "DZA", "BHR", "DJI", "EGY", "IRN", "IRQ", "ISR", "JOR",
+            "KWT", "LBN", "LBY", "MLT", "MAR", "OMN", "PAK", "PSE", "QAT",
+            "SAU", "SYR", "TUN", "ARE", "YEM",
         ],
     },
     "MENA_EXCL_ISR_MLT": {
         # MENA without Israel and Malta — used in some health-financing
-        # literature to focus on Arab-majority and developing MENA states.
-        "name": "Middle East & North Africa (excl. Israel and Malta)",
+        # literature. With the WB FY2026 reclassification this group now
+        # contains 21 economies (the 23-member MENA minus ISR and MLT,
+        # but including the newly-added AFG and PAK). Users wanting an
+        # Arab-states-only subset should additionally exclude AFG, PAK,
+        # and IRN.
+        "name": "Middle East, North Africa, AFG, PAK (excl. Israel and Malta)",
         "wb_code": None,
         "members": [
-            "DZA", "BHR", "DJI", "EGY", "IRN", "IRQ", "JOR", "KWT", "LBN",
-            "LBY", "MAR", "OMN", "PSE", "QAT", "SAU", "SYR", "TUN", "ARE",
-            "YEM",
+            "AFG", "DZA", "BHR", "DJI", "EGY", "IRN", "IRQ", "JOR", "KWT",
+            "LBN", "LBY", "MAR", "OMN", "PAK", "PSE", "QAT", "SAU", "SYR",
+            "TUN", "ARE", "YEM",
         ],
     },
     "NAR": {
@@ -122,9 +136,11 @@ WB_REGIONS: dict[str, dict[str, Any]] = {
         "members": ["BMU", "CAN", "USA"],
     },
     "SAS": {
-        "name": "South Asia",
+        "name": "South Asia (WB FY2026)",
         "wb_code": "SAS",
-        "members": ["AFG", "BGD", "BTN", "IND", "MDV", "NPL", "PAK", "LKA"],
+        # WB FY2026 dropped AFG and PAK from this region; they are now
+        # in MENA. Use the MENA group for analyses that need them.
+        "members": ["BGD", "BTN", "IND", "MDV", "NPL", "LKA"],
     },
     "SSA": {
         "name": "Sub-Saharan Africa",

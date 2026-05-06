@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-06
+
+### Changed
+- Country groupings updated to the World Bank FY2026 regional
+  classification (effective July 2025). Three regions reorganized:
+  `MENA` is renamed under the hood to "Middle East, North Africa,
+  Afghanistan and Pakistan" and now contains 23 economies (was 21);
+  `SAS` drops to 6 economies (was 8) since AFG and PAK moved into
+  the new MENA region; `EAP` drops to 38 economies (was 40) — Cook
+  Islands and Niue dropped because the WB FY2026 list excludes them.
+  `MENA_EXCL_ISR_MLT` recalculates to 21 (the new 23-member MENA
+  minus ISR and MLT, including the newly-added AFG and PAK).
+- Same change synced verbatim to gho-mcp.
+
+### Fixed
+- `MANIFEST.in` no longer references `AGENT.md` (the file was deleted
+  in the 0.5.0 release-prep commit but the manifest entry was missed,
+  and a stale sdist built before that cleanup still contained it).
+  CI now asserts the sdist contents — required files present, internal
+  files (`AGENT.md`, `CLAUDE.md`, `dev-notes/`) absent.
+- README tool table now shows the `country_group=` parameter on the
+  twelve data tools that accept it.
+
 ## [0.5.0] — 2026-05-06
 
 Initial public release. Folds in the full feature set developed

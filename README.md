@@ -114,7 +114,7 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `list_countries` | `(region=None, income=None)` | Countries and territories in the workbook, optionally by group |
+| `list_countries` | `(region=None, income=None, country_group=None)` | Countries and territories in the workbook, optionally by group |
 | `list_country_groups` | `()` | Available GHED region and income group values |
 | `find_country_code` | `(country)` | Resolve a country name fragment or alias to ISO3 |
 | `get_country_metadata` | `(country=None, indicator_code=None, top=20)` | Source, data-type, and estimation notes from the Metadata sheet |
@@ -124,21 +124,21 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `get_indicator_data` | `(indicator_code, country=None, region=None, income=None, year_start=None, year_end=None, latest_only=False, top=1000)` | One indicator with optional country/group/year filters |
-| `compare_countries` | `(indicator_code, countries, year_start=None, year_end=None, latest_only=False, top=5000, format="rows")` | One indicator across countries, returned as tidy rows or CSV |
-| `compare_country_group` | `(indicator_code, region=None, income=None, year_start=None, year_end=None, latest_only=True, top=5000, format="rows")` | One indicator across countries matching a region and/or income group |
-| `summarize_country_group` | `(indicator_code, region=None, income=None, year=None, latest_only=True, top_n=5)` | Group stats, coverage, top/bottom countries, and mixed-year warnings |
-| `indicator_trend` | `(indicator_code, countries=None, region=None, income=None, year_start=None, year_end=None, min_year_count=None, min_period_years=None, top=1000)` | First/latest country trends for one indicator |
-| `compare_trends` | `(indicator_codes, countries=None, region=None, income=None, year_start=None, year_end=None, top_per_indicator=1000)` | First/latest country trends for multiple indicators |
-| `rank_country_changes` | `(indicator_code, countries=None, region=None, income=None, year_start=None, year_end=None, metric="absolute_change", descending=True, min_year_count=None, min_period_years=None, top=20)` | Rank countries by absolute change, percent change, or CAGR |
+| `get_indicator_data` | `(indicator_code, country=None, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=False, top=1000)` | One indicator with optional country/group/year filters |
+| `compare_countries` | `(indicator_code, countries=None, country_group=None, year_start=None, year_end=None, latest_only=False, top=5000, format="rows")` | One indicator across countries, returned as tidy rows or CSV |
+| `compare_country_group` | `(indicator_code, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=True, top=5000, format="rows")` | One indicator across a country group (curated, regional, or income-based) |
+| `summarize_country_group` | `(indicator_code, country_group=None, region=None, income=None, year=None, latest_only=True, top_n=5)` | Group stats, coverage, top/bottom countries, and mixed-year warnings |
+| `indicator_trend` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, min_year_count=None, min_period_years=None, top=1000)` | First/latest country trends for one indicator |
+| `compare_trends` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top_per_indicator=1000)` | First/latest country trends for multiple indicators |
+| `rank_country_changes` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, metric="absolute_change", descending=True, min_year_count=None, min_period_years=None, top=20)` | Rank countries by absolute change, percent change, or CAGR |
 
 ### Research workflows
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `data_availability` | `(indicator_codes, countries=None, region=None, income=None, year_start=None, year_end=None)` | Availability summary for one or more variables before panel construction |
-| `build_research_panel` | `(indicator_codes, countries=None, region=None, income=None, year_start=None, year_end=None, top=10000, format="rows")` | Tidy long panel for multiple variables, countries, and years |
-| `build_research_package` | `(indicator_codes, countries=None, region=None, income=None, year_start=None, year_end=None, top=100000)` | Export-ready data CSV, codebook CSV, availability CSV, and README text |
+| `data_availability` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None)` | Availability summary for one or more variables before panel construction |
+| `build_research_panel` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=10000, format="rows")` | Tidy long panel for multiple variables, countries, and years |
+| `build_research_package` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=100000)` | Export-ready data CSV, codebook CSV, availability CSV, and README text |
 
 ### Quality and accounting checks
 
@@ -147,7 +147,7 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 | `additive_hierarchy` | `(indicator_code)` | Known additive parent-child relationships for a variable |
 | `explain_indicator_relationship` | `(indicator_code)` | Classify a variable as total, component, ratio/share, amount, or context series |
 | `build_additive_breakdown` | `(indicator_code, country, year, relationship_id=None)` | Country-year breakdown with child sum, shares, and balance check |
-| `assess_data_quality` | `(indicator_code, country=None, countries=None, region=None, income=None, year_start=None, year_end=None, top=20)` | Availability, metadata completeness, data-type mix, and caution flags |
+| `assess_data_quality` | `(indicator_code, country=None, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=20)` | Availability, metadata completeness, data-type mix, and caution flags |
 
 ### Resources and prompts
 
@@ -167,12 +167,12 @@ Both `gho-mcp` and `ghed-mcp` expose the same curated country groupings beyond w
 |---|---|---|
 | `LAC` | 33 sovereign Latin American & Caribbean states (PAHO/Decilion convention) | 33 |
 | `LAC_TERRITORIES` | World Bank's 42-economy LAC region — sovereign states plus territories (Aruba, Cayman Islands, Curaçao, Puerto Rico, etc.) | 42 |
-| `EAP` | World Bank East Asia & Pacific | 40 |
+| `EAP` | World Bank East Asia & Pacific (FY2026) | 38 |
 | `ECA` | World Bank Europe & Central Asia | 58 |
-| `MENA` | World Bank Middle East & North Africa | 21 |
-| `MENA_EXCL_ISR_MLT` | MENA excluding Israel and Malta (Arab-majority/developing focus) | 19 |
+| `MENA` | World Bank "Middle East, North Africa, Afghanistan and Pakistan" (FY2026) | 23 |
+| `MENA_EXCL_ISR_MLT` | MENA without Israel and Malta | 21 |
 | `NAR` | World Bank North America (Bermuda, Canada, USA) | 3 |
-| `SAS` | World Bank South Asia | 8 |
+| `SAS` | World Bank South Asia (FY2026 — without AFG and PAK, now in MENA) | 6 |
 | `SSA` | World Bank Sub-Saharan Africa | 48 |
 | `LDC` | UN Least Developed Countries | 44 |
 | `OECD` | OECD member countries | 38 |

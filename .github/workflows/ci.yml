@@ -40,6 +40,24 @@ jobs:
         run: python -m build
       - name: twine check
         run: python -m twine check dist/*
+      - name: Verify sdist contents
+        run: |
+          python -c "
+          import glob, sys, tarfile
+          (path,) = glob.glob('dist/mcp_server_ghed-*.tar.gz')
+          with tarfile.open(path) as t:
+              names = t.getnames()
+          required = ['assets/decilion-banner.png', 'assets/decilion-banner.svg',
+                      'LICENSE', 'README.md', 'CHANGELOG.md']
+          forbidden = ['AGENT.md', 'CLAUDE.md', 'dev-notes/']
+          missing = [r for r in required if not any(r in n for n in names)]
+          leaked = [f for f in forbidden if any(f in n for n in names)]
+          if missing:
+              sys.exit(f'sdist missing required files: {missing}')
+          if leaked:
+              sys.exit(f'sdist leaked files that should be excluded: {leaked}')
+          print('sdist contents OK')
+          "
       - name: Install built wheel into a fresh venv
         run: |
           python -m venv /tmp/wheelvenv

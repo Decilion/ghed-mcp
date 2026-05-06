@@ -18,7 +18,7 @@ DOCUMENTATION_TREE_URL = (
     "https://apps.who.int/nha/database/DocumentationCentre/GetTree/en"
 )
 LEGACY_SOURCE_URL = "https://apps.who.int/nha/database/Home/IndicatorsDownload/en"
-USER_AGENT = "mcp-server-ghed/0.5.0 (+https://decilion.com)"
+USER_AGENT = "mcp-server-ghed/0.5.1 (+https://decilion.com)"
 DEFAULT_TIMEOUT = 120.0
 _MAX_DOWNLOAD_ATTEMPTS = 3
 _BACKOFF_BASE_SECONDS = 2.0
