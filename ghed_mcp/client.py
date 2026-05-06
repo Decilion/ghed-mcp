@@ -1,6 +1,8 @@
 """Workbook download, cache, and provenance helpers."""
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -9,6 +11,8 @@ from typing import Any
 
 import httpx
 
+logger = logging.getLogger("ghed_mcp.client")
+
 BASE_URL = "https://apps.who.int"
 DOCUMENTATION_TREE_URL = (
     "https://apps.who.int/nha/database/DocumentationCentre/GetTree/en"
@@ -16,6 +20,12 @@ DOCUMENTATION_TREE_URL = (
 LEGACY_SOURCE_URL = "https://apps.who.int/nha/database/Home/IndicatorsDownload/en"
 USER_AGENT = "mcp-server-ghed/0.1.0 (+https://decilion.com)"
 DEFAULT_TIMEOUT = 120.0
+_MAX_DOWNLOAD_ATTEMPTS = 3
+_BACKOFF_BASE_SECONDS = 2.0
+
+
+def _is_retryable_status(status: int) -> bool:
+    return status >= 500 or status == 429
 
 
 class GHEDError(Exception):
@@ -97,27 +107,48 @@ def find_latest_all_data_document(tree: dict[str, Any]) -> dict[str, Any]:
 
 async def get_latest_all_data_document() -> dict[str, Any]:
     """Fetch Documentation Centre metadata and return the current all-data file."""
-    try:
-        async with httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(DOCUMENTATION_TREE_URL)
-            response.raise_for_status()
-            return find_latest_all_data_document(response.json())
-    except httpx.HTTPStatusError as e:
+    last_error: Exception | None = None
+    for attempt in range(1, _MAX_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT,
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(DOCUMENTATION_TREE_URL)
+                response.raise_for_status()
+                return find_latest_all_data_document(response.json())
+        except httpx.HTTPStatusError as e:
+            if not _is_retryable_status(e.response.status_code):
+                raise GHEDError(
+                    f"HTTP {e.response.status_code} fetching GHED Documentation Centre: "
+                    f"{e.response.reason_phrase}",
+                    status=e.response.status_code,
+                    source_url=DOCUMENTATION_TREE_URL,
+                ) from e
+            last_error = e
+        except httpx.HTTPError as e:
+            last_error = e
+        if attempt < _MAX_DOWNLOAD_ATTEMPTS:
+            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "Documentation Centre fetch attempt %d failed (%s); retrying in %.0fs",
+                attempt,
+                last_error,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    if isinstance(last_error, httpx.HTTPStatusError):
         raise GHEDError(
-            f"HTTP {e.response.status_code} fetching GHED Documentation Centre: "
-            f"{e.response.reason_phrase}",
-            status=e.response.status_code,
+            f"HTTP {last_error.response.status_code} fetching GHED Documentation Centre: "
+            f"{last_error.response.reason_phrase}",
+            status=last_error.response.status_code,
             source_url=DOCUMENTATION_TREE_URL,
-        ) from e
-    except httpx.HTTPError as e:
-        raise GHEDError(
-            f"Network error fetching GHED Documentation Centre: {e}",
-            source_url=DOCUMENTATION_TREE_URL,
-        ) from e
+        ) from last_error
+    raise GHEDError(
+        f"Network error fetching GHED Documentation Centre: {last_error}",
+        source_url=DOCUMENTATION_TREE_URL,
+    ) from last_error
 
 
 def document_download_url(document_id: int | str) -> str:
@@ -177,17 +208,9 @@ async def download_workbook(
         doc = await get_latest_all_data_document()
         source_url = document_download_url(doc["Identifier"])
 
+    logger.info("Downloading GHED workbook from %s", source_url)
     try:
-        async with httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT,
-            headers={"User-Agent": USER_AGENT},
-            follow_redirects=True,
-        ) as client:
-            async with client.stream("GET", source_url) as response:
-                response.raise_for_status()
-                with tmp.open("wb") as fh:
-                    async for chunk in response.aiter_bytes():
-                        fh.write(chunk)
+        await _stream_to_file(source_url, tmp)
     except httpx.HTTPStatusError as e:
         raise GHEDError(
             f"HTTP {e.response.status_code} downloading GHED workbook: "
@@ -206,7 +229,44 @@ async def download_workbook(
     tmp.replace(dest)
     if doc is not None:
         write_source_manifest(doc)
+    size_mb = dest.stat().st_size / (1024 * 1024)
+    logger.info("Downloaded GHED workbook to %s (%.1f MB)", dest, size_mb)
     return dest
+
+
+async def _stream_to_file(source_url: str, destination: Path) -> None:
+    """Stream a GET response to a local file, with retries on transient errors."""
+    last_error: Exception | None = None
+    for attempt in range(1, _MAX_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT,
+                headers={"User-Agent": USER_AGENT},
+                follow_redirects=True,
+            ) as client:
+                async with client.stream("GET", source_url) as response:
+                    response.raise_for_status()
+                    with destination.open("wb") as fh:
+                        async for chunk in response.aiter_bytes():
+                            fh.write(chunk)
+            return
+        except httpx.HTTPStatusError as e:
+            if not _is_retryable_status(e.response.status_code):
+                raise
+            last_error = e
+        except httpx.HTTPError as e:
+            last_error = e
+        if attempt < _MAX_DOWNLOAD_ATTEMPTS:
+            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "Workbook download attempt %d failed (%s); retrying in %.0fs",
+                attempt,
+                last_error,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    assert last_error is not None
+    raise last_error
 
 
 async def ensure_workbook(refresh: bool = False) -> Path:

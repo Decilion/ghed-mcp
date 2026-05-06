@@ -4,8 +4,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
+import re
 import sqlite3
 import statistics
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +18,8 @@ from typing import Any, Iterable
 from openpyxl import load_workbook
 
 from .methodology import ADDITIVE_RELATIONSHIPS
+
+logger = logging.getLogger("ghed_mcp.store")
 
 CORE_COLUMNS = {"location", "code", "region", "income", "year"}
 DEFAULT_PROFILE_INDICATORS = [
@@ -54,6 +59,71 @@ COUNTRY_ALIASES: dict[str, str] = {
     "TÜRKIYE": "TUR",
     "TURKIYE": "TUR",
 }
+
+REGION_ALIASES: dict[str, str] = {
+    "AFR": "AFR",
+    "AFRO": "AFR",
+    "AFRICA": "AFR",
+    "AFRICAN": "AFR",
+    "AFRICAN REGION": "AFR",
+    "WHO AFRICAN REGION": "AFR",
+    "AMR": "AMR",
+    "AMRO": "AMR",
+    "AMERICAS": "AMR",
+    "AMERICA": "AMR",
+    "REGION OF THE AMERICAS": "AMR",
+    "PAHO": "AMR",
+    "EMR": "EMR",
+    "EMRO": "EMR",
+    "EASTERN MEDITERRANEAN": "EMR",
+    "EASTERN MEDITERRANEAN REGION": "EMR",
+    "EUR": "EUR",
+    "EURO": "EUR",
+    "EUROPE": "EUR",
+    "EUROPEAN": "EUR",
+    "EUROPEAN REGION": "EUR",
+    "SEAR": "SEAR",
+    "SEARO": "SEAR",
+    "SOUTH EAST ASIA": "SEAR",
+    "SOUTHEAST ASIA": "SEAR",
+    "SOUTH EAST ASIA REGION": "SEAR",
+    "WPR": "WPR",
+    "WPRO": "WPR",
+    "WESTERN PACIFIC": "WPR",
+    "WESTERN PACIFIC REGION": "WPR",
+}
+
+INCOME_ALIASES: dict[str, str] = {
+    "LOW": "Low",
+    "LOW INCOME": "Low",
+    "LOW INCOME COUNTRIES": "Low",
+    "LIC": "Low",
+    "LOWER MIDDLE": "Lower-middle",
+    "LOWER MIDDLE INCOME": "Lower-middle",
+    "LOWER MIDDLE INCOME COUNTRIES": "Lower-middle",
+    "LMIC": "Lower-middle",
+    "LMC": "Lower-middle",
+    "UPPER MIDDLE": "Upper-middle",
+    "UPPER MIDDLE INCOME": "Upper-middle",
+    "UPPER MIDDLE INCOME COUNTRIES": "Upper-middle",
+    "UMIC": "Upper-middle",
+    "UMC": "Upper-middle",
+    "HIGH": "High",
+    "HIGH INCOME": "High",
+    "HIGH INCOME COUNTRIES": "High",
+    "HIC": "High",
+}
+
+
+def _norm_group_key(value: str) -> str:
+    """Normalize a region/income value into a lookup key.
+
+    Strips accents, uppercases, and collapses hyphens/underscores/whitespace
+    so that 'Upper-middle', 'upper middle income', and 'UMIC' all collide.
+    """
+    normalized = unicodedata.normalize("NFKD", value.strip())
+    ascii_value = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return re.sub(r"[\s\-_]+", " ", ascii_value.upper()).strip()
 
 
 @dataclass(frozen=True)
@@ -204,6 +274,8 @@ class GHEDStore:
         if tmp.exists():
             tmp.unlink()
 
+        logger.info("Rebuilding SQLite cache from %s", self.path)
+        started = time.monotonic()
         conn = sqlite3.connect(tmp)
         try:
             conn.execute("pragma journal_mode = off")
@@ -217,8 +289,21 @@ class GHEDStore:
             if tmp.exists():
                 tmp.unlink()
             raise
+        counts = {
+            "countries": conn.execute("select count(*) from countries").fetchone()[0],
+            "indicators": conn.execute("select count(*) from indicators").fetchone()[0],
+            "observations": conn.execute("select count(*) from observations").fetchone()[0],
+        }
         conn.close()
         tmp.replace(self.sqlite_path)
+        elapsed = time.monotonic() - started
+        logger.info(
+            "Rebuilt SQLite cache in %.1fs (countries=%d, indicators=%d, observations=%d)",
+            elapsed,
+            counts["countries"],
+            counts["indicators"],
+            counts["observations"],
+        )
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
@@ -601,20 +686,68 @@ class GHEDStore:
         ).fetchall()
         return [_dict(row) for row in rows]
 
+    def available_regions(self) -> list[str]:
+        rows = self._connect().execute(
+            "select distinct region from countries where region is not null order by region"
+        ).fetchall()
+        return [row["region"] for row in rows]
+
+    def available_incomes(self) -> list[str]:
+        rows = self._connect().execute(
+            "select distinct income from countries where income is not null order by income"
+        ).fetchall()
+        return [row["income"] for row in rows]
+
+    def normalize_region(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not str(value).strip():
+            return None
+        available = self.available_regions()
+        canonical = REGION_ALIASES.get(_norm_group_key(value))
+        if canonical and canonical in available:
+            return canonical
+        for region in available:
+            if _norm_group_key(region) == _norm_group_key(value):
+                return region
+        raise ValueError(
+            f"Unknown region '{value}'. Available regions: "
+            f"{', '.join(available) if available else '(none in workbook)'}."
+        )
+
+    def normalize_income(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not str(value).strip():
+            return None
+        available = self.available_incomes()
+        canonical = INCOME_ALIASES.get(_norm_group_key(value))
+        if canonical and canonical in available:
+            return canonical
+        for income in available:
+            if _norm_group_key(income) == _norm_group_key(value):
+                return income
+        raise ValueError(
+            f"Unknown income group '{value}'. Available income groups: "
+            f"{', '.join(available) if available else '(none in workbook)'}."
+        )
+
     def countries(
         self,
         *,
         region: str | None = None,
         income: str | None = None,
     ) -> list[dict[str, Any]]:
+        region = self.normalize_region(region)
+        income = self.normalize_income(income)
         conn = self._connect()
         where = []
         params: list[Any] = []
         if region:
-            where.append("lower(region) = lower(?)")
+            where.append("region = ?")
             params.append(region)
         if income:
-            where.append("lower(income) = lower(?)")
+            where.append("income = ?")
             params.append(income)
         sql = """
             select country_code, country_name, region, income
@@ -759,6 +892,8 @@ class GHEDStore:
     ) -> list[dict[str, Any]]:
         if self.get_indicator(indicator_code) is None:
             raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
+        region = self.normalize_region(region)
+        income = self.normalize_income(income)
 
         resolved = None
         if countries:
@@ -771,10 +906,10 @@ class GHEDStore:
             where.append(f"o.country_code in ({placeholders})")
             params.extend(resolved)
         if region:
-            where.append("lower(c.region) = lower(?)")
+            where.append("c.region = ?")
             params.append(region)
         if income:
-            where.append("lower(c.income) = lower(?)")
+            where.append("c.income = ?")
             params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
@@ -855,6 +990,8 @@ class GHEDStore:
         for code in indicator_codes:
             if self.get_indicator(code) is None:
                 raise ValueError(f"Unknown GHED indicator '{code}'.")
+        region = self.normalize_region(region)
+        income = self.normalize_income(income)
         resolved = None
         if countries:
             resolved = [self.resolve_country(c) for c in countries]
@@ -865,10 +1002,10 @@ class GHEDStore:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
         if region:
-            where.append("lower(c.region) = lower(?)")
+            where.append("c.region = ?")
             params.append(region)
         if income:
-            where.append("lower(c.income) = lower(?)")
+            where.append("c.income = ?")
             params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
@@ -924,6 +1061,8 @@ class GHEDStore:
         for code in indicator_codes:
             if self.get_indicator(code) is None:
                 raise ValueError(f"Unknown GHED indicator '{code}'.")
+        region = self.normalize_region(region)
+        income = self.normalize_income(income)
         resolved = None
         if countries:
             resolved = [self.resolve_country(c) for c in countries]
@@ -934,10 +1073,10 @@ class GHEDStore:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
         if region:
-            where.append("lower(c.region) = lower(?)")
+            where.append("c.region = ?")
             params.append(region)
         if income:
-            where.append("lower(c.income) = lower(?)")
+            where.append("c.income = ?")
             params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
@@ -1156,10 +1295,14 @@ class GHEDStore:
         income: str | None = None,
         year_start: int | None = None,
         year_end: int | None = None,
+        min_year_count: int | None = None,
+        min_period_years: int | None = None,
         top: int = 1000,
     ) -> list[dict[str, Any]]:
         if self.get_indicator(indicator_code) is None:
             raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
+        region = self.normalize_region(region)
+        income = self.normalize_income(income)
         resolved = None
         if countries:
             resolved = [self.resolve_country(c) for c in countries]
@@ -1170,10 +1313,10 @@ class GHEDStore:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
         if region:
-            where.append("lower(c.region) = lower(?)")
+            where.append("c.region = ?")
             params.append(region)
         if income:
-            where.append("lower(c.income) = lower(?)")
+            where.append("c.income = ?")
             params.append(income)
         if year_start is not None:
             where.append("o.year >= ?")
@@ -1202,7 +1345,11 @@ class GHEDStore:
         for code, series in by_country.items():
             first = series[0]
             last = series[-1]
-            periods = int(last["year"]) - int(first["year"])
+            period_years = int(last["year"]) - int(first["year"])
+            if min_year_count is not None and len(series) < int(min_year_count):
+                continue
+            if min_period_years is not None and period_years < int(min_period_years):
+                continue
             out.append({
                 "country_code": code,
                 "country_name": first["country_name"],
@@ -1213,9 +1360,10 @@ class GHEDStore:
                 "latest_year": last["year"],
                 "latest_value": last["value"],
                 "year_count": len(series),
+                "period_years": period_years,
                 "absolute_change": float(last["value"]) - float(first["value"]),
                 "percent_change": _pct_change(first["value"], last["value"]),
-                "cagr": _cagr(first["value"], last["value"], periods),
+                "cagr": _cagr(first["value"], last["value"], period_years),
             })
         out.sort(key=lambda row: row["absolute_change"], reverse=True)
         return out[:top]

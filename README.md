@@ -20,12 +20,19 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 
 ## Tools
 
+### Cache and version
+
 | Tool | Purpose |
 |---|---|
 | `refresh_cache` | Download or re-download the public GHED workbook |
 | `cache_status` | Show workbook, SQLite cache, source document, and row counts |
 | `check_for_updates` | Compare the cached source document with the current all-data workbook metadata |
 | `version` | Return workbook version and cache provenance |
+
+### Methodology and discovery
+
+| Tool | Purpose |
+|---|---|
 | `methodology_guide` | Explain GHED variable classes, categories, cautions, and curated topics |
 | `topics_index` | Curated topic map for common health-expenditure questions |
 | `research_use_cases` | Literature-inspired GHED research workflows and recommended variables |
@@ -35,17 +42,22 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `list_variables` | Paginated full GHED codebook variables |
 | `search_indicators` | Search headline indicators by default |
 | `search_variables` | Search all variables, including detailed SHA series |
+| `get_indicator_metadata` | Codebook metadata for one variable |
+
+### Country resolution
+
+| Tool | Purpose |
+|---|---|
 | `list_countries` | Countries and territories in the workbook |
 | `list_country_groups` | Available GHED region and income group values |
 | `find_country_code` | Resolve a country name fragment to ISO3 |
-| `get_indicator_metadata` | Codebook metadata for one variable |
 | `get_country_metadata` | Source and estimation notes for one country/indicator |
-| `data_availability` | Availability summary for one or more variables before panel construction |
-| `additive_hierarchy` | Known additive parent-child relationships for a variable |
-| `explain_indicator_relationship` | Classify a variable as total, component, ratio/share, amount, or context series |
-| `build_additive_breakdown` | Country-year breakdown with child sum, shares, and balance check |
-| `build_research_panel` | Tidy long panel for multiple variables, countries, and years |
-| `build_research_package` | Export-ready data CSV, codebook CSV, availability CSV, and README text |
+| `country_profile` | Latest headline health expenditure values for one country |
+
+### Data extraction
+
+| Tool | Purpose |
+|---|---|
 | `get_indicator_data` | One indicator with optional country and year filters |
 | `compare_countries` | One indicator across countries, returned as tidy rows or CSV |
 | `compare_country_group` | One indicator across countries matching a region and/or income group |
@@ -53,8 +65,27 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 | `indicator_trend` | First/latest country trends for one indicator |
 | `compare_trends` | First/latest country trends for multiple indicators |
 | `rank_country_changes` | Rank countries by absolute change, percent change, or CAGR |
+
+### Research workflows
+
+| Tool | Purpose |
+|---|---|
+| `data_availability` | Availability summary for one or more variables before panel construction |
+| `build_research_panel` | Tidy long panel for multiple variables, countries, and years |
+| `build_research_package` | Export-ready data CSV, codebook CSV, availability CSV, and README text |
+
+### Quality and accounting checks
+
+| Tool | Purpose |
+|---|---|
+| `additive_hierarchy` | Known additive parent-child relationships for a variable |
+| `explain_indicator_relationship` | Classify a variable as total, component, ratio/share, amount, or context series |
+| `build_additive_breakdown` | Country-year breakdown with child sum, shares, and balance check |
 | `assess_data_quality` | Availability, metadata completeness, data-type mix, and caution flags |
-| `country_profile` | Latest headline health expenditure values for one country |
+
+### Inputs
+
+`region` and `income` filters accept aliases — for example `region="Americas"` or `region="AMR"`, and `income="upper middle income"` or `"UMIC"` or `"Upper-middle"`. Passing an unknown value returns the available canonical values from the loaded workbook. `indicator_trend` and `rank_country_changes` accept `min_year_count` and `min_period_years` to restrict trend rankings to countries with comparable windows; mixed-period results emit a `mixed_periods` warning.
 
 ## Data Source
 

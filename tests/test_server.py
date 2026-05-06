@@ -569,6 +569,68 @@ def test_find_latest_all_data_document_uses_documentation_tree():
     )
 
 
+async def test_region_alias_resolution():
+    via_alias = await server.compare_country_group(
+        "che_gdp",
+        region="Americas",
+        latest_only=True,
+    )
+    via_canonical = await server.compare_country_group(
+        "che_gdp",
+        region="AMR",
+        latest_only=True,
+    )
+
+    assert {row["country_code"] for row in via_alias["rows"]} == {
+        row["country_code"] for row in via_canonical["rows"]
+    }
+
+
+async def test_income_alias_resolution():
+    via_canonical = await server.list_countries(income="Upper-middle")
+    via_natural = await server.list_countries(income="upper middle income")
+    via_short = await server.list_countries(income="UMIC")
+
+    expected = {row["country_code"] for row in via_canonical["items"]}
+    assert {row["country_code"] for row in via_natural["items"]} == expected
+    assert {row["country_code"] for row in via_short["items"]} == expected
+
+
+async def test_unknown_region_lists_available_values():
+    with pytest.raises(ValueError, match="Available regions"):
+        await server.list_countries(region="Atlantis")
+
+
+async def test_unknown_income_lists_available_values():
+    with pytest.raises(ValueError, match="Available income groups"):
+        await server.list_countries(income="middle-class")
+
+
+async def test_indicator_trend_carries_period_years():
+    trend = await server.indicator_trend(
+        "che_gdp",
+        countries=["Colombia", "Peru"],
+        year_start=2022,
+        year_end=2023,
+    )
+
+    by_code = {row["country_code"]: row for row in trend["rows"]}
+    assert by_code["COL"]["period_years"] == 1
+    assert by_code["PER"]["period_years"] == 0
+
+
+async def test_rank_country_changes_filters_by_min_year_count():
+    ranked = await server.rank_country_changes(
+        "che_gdp",
+        countries=["Colombia", "Peru"],
+        year_start=2022,
+        year_end=2023,
+        min_year_count=2,
+    )
+
+    assert {row["country_code"] for row in ranked["rows"]} == {"COL"}
+
+
 def test_normalize_source_document():
     doc = normalize_source_document({
         "Identifier": 64396441,
