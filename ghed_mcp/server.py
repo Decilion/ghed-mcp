@@ -16,7 +16,6 @@ from .client import (
     ensure_workbook,
     get_latest_all_data_document,
     normalize_source_document,
-    provenance,
     read_source_manifest,
 )
 from .country_groups import (
@@ -27,6 +26,7 @@ from .country_groups import (
 
 
 async def _merge_countries(
+    store: GHEDStore,
     *,
     country: str | None = None,
     countries: list[str] | None = None,
@@ -50,7 +50,6 @@ async def _merge_countries(
     """
     if country is None and countries is None and country_group is None:
         return None
-    store = await get_store()
     seen: set[str] = set()
     out: list[str] = []
 
@@ -145,7 +144,7 @@ async def refresh_cache() -> dict[str, Any]:
         return e.to_dict()
     result = {
         "ok": True,
-        "source": provenance(workbook=store.path, operation="refresh_cache"),
+        "source": store.provenance(operation="refresh_cache"),
         "source_document": read_source_manifest(),
         "cache": store.cache_status(),
         "version": store.version(),
@@ -158,7 +157,7 @@ async def cache_status() -> dict[str, Any]:
     """Return local workbook and derived SQLite cache status."""
     store = await get_store()
     result = {
-        "source": provenance(workbook=store.path, operation="cache_status"),
+        "source": store.provenance(operation="cache_status"),
         "source_document": read_source_manifest(),
         "cache": store.cache_status(),
         "version": store.version(),
@@ -187,7 +186,7 @@ async def version() -> dict[str, Any]:
     """Return workbook version lines and cache provenance."""
     store = await get_store()
     result = {
-        "source": provenance(workbook=store.path, operation="version"),
+        "source": store.provenance(operation="version"),
         "cache": {
             "sqlite_path": str(store.sqlite_path),
             "sqlite_current": store.cache_status()["sqlite_current"],
@@ -206,8 +205,8 @@ async def methodology_guide() -> dict[str, Any]:
         "current_counts": store.indicator_categories(),
         "version": store.version(),
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="methodology_guide",
+    result["source"] = store.provenance(
+        operation="methodology_guide",
         params={
         },
     )
@@ -237,8 +236,8 @@ async def list_variable_categories() -> dict[str, Any]:
     """List GHED variable category counts from the Codebook."""
     store = await get_store()
     result = store.indicator_categories()
-    result["source"] = provenance(
-        workbook=store.path, operation="list_variable_categories",
+    result["source"] = store.provenance(
+        operation="list_variable_categories",
         params={
         },
     )
@@ -261,8 +260,8 @@ async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
         "top": top,
         "items": items,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="list_indicators",
+    result["source"] = store.provenance(
+        operation="list_indicators",
         params={
             'skip': skip,
             'top': top,
@@ -298,8 +297,8 @@ async def list_variables(
         "top": top,
         "items": items,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="list_variables",
+    result["source"] = store.provenance(
+        operation="list_variables",
         params={
             'category_1': category_1,
             'category_2': category_2,
@@ -333,8 +332,8 @@ async def search_indicators(
         "count": len(items),
         "items": items,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="search_indicators",
+    result["source"] = store.provenance(
+        operation="search_indicators",
         params={
             'query': query,
             'top': top,
@@ -368,8 +367,8 @@ async def search_variables(
         "count": len(items),
         "items": items,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="search_variables",
+    result["source"] = store.provenance(
+        operation="search_variables",
         params={
             'query': query,
             'top': top,
@@ -404,8 +403,8 @@ async def list_countries(
         "count": len(items),
         "items": items,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="list_countries",
+    result["source"] = store.provenance(
+        operation="list_countries",
         params={
             'region': region,
             'income': income,
@@ -421,8 +420,8 @@ async def list_country_groups() -> dict[str, Any]:
     """List GHED country grouping values by region and World Bank income class."""
     store = await get_store()
     result = store.country_groups()
-    result["source"] = provenance(
-        workbook=store.path, operation="list_country_groups",
+    result["source"] = store.provenance(
+        operation="list_country_groups",
         params={
         },
     )
@@ -470,8 +469,8 @@ async def find_country_code(
     store = await get_store()
     matches = store.find_countries(query)
     result = {"query": query, "count": len(matches), "matches": matches}
-    result["source"] = provenance(
-        workbook=store.path, operation="find_country_code",
+    result["source"] = store.provenance(
+        operation="find_country_code",
         params={
             'country': country,
             'country_name': country_name,
@@ -488,8 +487,8 @@ async def get_indicator_metadata(indicator_code: str) -> dict[str, Any]:
     if metadata is None:
         return {"indicator_code": indicator_code, "found": False}
     result = {"indicator_code": indicator_code, "found": True, "metadata": metadata}
-    result["source"] = provenance(
-        workbook=store.path, operation="get_indicator_metadata",
+    result["source"] = store.provenance(
+        operation="get_indicator_metadata",
         params={
             'indicator_code': indicator_code,
         },
@@ -513,8 +512,8 @@ async def get_country_metadata(
         "count": len(rows),
         "rows": rows,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="get_country_metadata",
+    result["source"] = store.provenance(
+        operation="get_country_metadata",
         params={
             'country': country,
             'indicator_code': indicator_code,
@@ -537,10 +536,10 @@ async def data_availability(
     """Summarize availability for indicators before building a research panel."""
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
-    merged_countries = await _merge_countries(
-        countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, countries=countries, country_group=country_group
+    )
     rows = store.data_availability(
         indicator_codes,
         countries=merged_countries,
@@ -560,8 +559,8 @@ async def data_availability(
         "count": len(rows),
         "items": rows,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="data_availability",
+    result["source"] = store.provenance(
+        operation="data_availability",
         params={
             'indicator_codes': indicator_codes,
             'countries': countries,
@@ -591,8 +590,8 @@ async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
             "variants as accounting identities."
         ),
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="additive_hierarchy",
+    result["source"] = store.provenance(
+        operation="additive_hierarchy",
         params={
             'indicator_code': indicator_code,
         },
@@ -605,8 +604,8 @@ async def explain_indicator_relationship(indicator_code: str) -> dict[str, Any]:
     """Explain whether a variable is a total, component, ratio/share, or context series."""
     store = await get_store()
     result = store.explain_relationship(indicator_code)
-    result["source"] = provenance(
-        workbook=store.path, operation="explain_indicator_relationship",
+    result["source"] = store.provenance(
+        operation="explain_indicator_relationship",
         params={
             'indicator_code': indicator_code,
         },
@@ -629,8 +628,8 @@ async def build_additive_breakdown(
         year=year,
         relationship_id=relationship_id,
     )
-    result["source"] = provenance(
-        workbook=store.path, operation="build_additive_breakdown",
+    result["source"] = store.provenance(
+        operation="build_additive_breakdown",
         params={
             'indicator_code': indicator_code,
             'country': country,
@@ -665,10 +664,10 @@ async def build_research_panel(
     if fmt not in ("rows", "csv"):
         raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
     top = max(1, min(top, 100000))
-    merged_countries = await _merge_countries(
-        countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, countries=countries, country_group=country_group
+    )
     rows = store.research_panel(
         indicator_codes,
         countries=merged_countries,
@@ -703,8 +702,8 @@ async def build_research_panel(
         result["csv"] = rows_to_csv(rows)
     else:
         result["rows"] = rows
-    result["source"] = provenance(
-        workbook=store.path, operation="build_research_panel",
+    result["source"] = store.provenance(
+        operation="build_research_panel",
         params={
             'indicator_codes': indicator_codes,
             'countries': countries,
@@ -736,10 +735,10 @@ async def build_research_package(
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
     top = max(1, min(top, 200000))
-    merged_countries = await _merge_countries(
-        countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, countries=countries, country_group=country_group
+    )
     rows = store.research_panel(
         indicator_codes,
         countries=merged_countries,
@@ -761,8 +760,7 @@ async def build_research_package(
         year_start=year_start,
         year_end=year_end,
     )
-    source = provenance(
-        workbook=store.path,
+    source = store.provenance(
         operation="build_research_package",
         params={
             "indicator_codes": indicator_codes,
@@ -842,10 +840,10 @@ async def get_indicator_data(
     and `region` / `income` further constrain via SQL AND.
     """
     top = max(1, min(top, 5000))
-    merged_countries = await _merge_countries(
-        country=country, countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, country=country, countries=countries, country_group=country_group
+    )
     rows = store.indicator_data(
         indicator_code,
         countries=merged_countries,
@@ -858,8 +856,7 @@ async def get_indicator_data(
     )
     result: dict[str, Any] = {
         "indicator_code": indicator_code,
-        "source": provenance(
-            workbook=store.path,
+        "source": store.provenance(
             operation="get_indicator_data",
             params={
                 "indicator_code": indicator_code,
@@ -910,8 +907,9 @@ async def compare_countries(
     (e.g. "LAC", "OECD", "LDC", "SSA") — or both, in which case they are
     merged. See list_curated_country_groups for available groups.
     """
+    store = await get_store()
     merged = await _merge_countries(
-        countries=countries, country_group=country_group
+        store, countries=countries, country_group=country_group
     )
     if merged is None:
         raise ValueError(
@@ -922,7 +920,6 @@ async def compare_countries(
         raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
     top = max(1, min(top, 10000))
 
-    store = await get_store()
     resolved = [{"input": c, "code": store.resolve_country(c)} for c in merged]
     rows = store.indicator_data(
         indicator_code,
@@ -936,8 +933,7 @@ async def compare_countries(
         "indicator_code": indicator_code,
         "country_group": country_group,
         "countries_resolved": resolved,
-        "source": provenance(
-            workbook=store.path,
+        "source": store.provenance(
             operation="compare_countries",
             params={
                 "indicator_code": indicator_code,
@@ -999,8 +995,8 @@ async def compare_country_group(
         raise ValueError(f"Unknown format '{format}'. Use 'rows' or 'csv'.")
     top = max(1, min(top, 10000))
 
-    merged_countries = await _merge_countries(country_group=country_group)
     store = await get_store()
+    merged_countries = await _merge_countries(store, country_group=country_group)
     if merged_countries is not None:
         # Resolve to ISO3 first so the country list passed to the store
         # accepts both names and codes uniformly.
@@ -1025,8 +1021,7 @@ async def compare_country_group(
         "income": income,
         "country_count": len(countries),
         "countries": countries,
-        "source": provenance(
-            workbook=store.path,
+        "source": store.provenance(
             operation="compare_country_group",
             params={
                 "indicator_code": indicator_code,
@@ -1082,8 +1077,8 @@ async def summarize_country_group(
             "Pass at least one of 'country_group', 'region', or 'income'."
         )
     top_n = max(1, min(top_n, 25))
-    merged_countries = await _merge_countries(country_group=country_group)
     store = await get_store()
+    merged_countries = await _merge_countries(store, country_group=country_group)
     result = store.group_summary(
         indicator_code,
         countries=merged_countries,
@@ -1094,8 +1089,7 @@ async def summarize_country_group(
         top_n=top_n,
     )
     result["country_group"] = country_group
-    result["source"] = provenance(
-        workbook=store.path,
+    result["source"] = store.provenance(
         operation="summarize_country_group",
         params={
             "indicator_code": indicator_code,
@@ -1150,10 +1144,10 @@ async def indicator_trend(
 ) -> dict[str, Any]:
     """Compute country-level first/latest trends for one GHED indicator."""
     top = max(1, min(top, 5000))
-    merged_countries = await _merge_countries(
-        countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, countries=countries, country_group=country_group
+    )
     rows = store.indicator_trends(
         indicator_code,
         countries=merged_countries,
@@ -1177,8 +1171,7 @@ async def indicator_trend(
         "min_period_years": min_period_years,
         "count": len(rows),
         "rows": rows,
-        "source": provenance(
-            workbook=store.path,
+        "source": store.provenance(
             operation="indicator_trend",
             params={
                 "indicator_code": indicator_code,
@@ -1216,10 +1209,10 @@ async def compare_trends(
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
     top_per_indicator = max(1, min(top_per_indicator, 5000))
-    merged_countries = await _merge_countries(
-        countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, countries=countries, country_group=country_group
+    )
     items = []
     for indicator_code in indicator_codes:
         rows = store.indicator_trends(
@@ -1247,8 +1240,8 @@ async def compare_trends(
         "year_end": year_end,
         "items": items,
     }
-    result["source"] = provenance(
-        workbook=store.path, operation="compare_trends",
+    result["source"] = store.provenance(
+        operation="compare_trends",
         params={
             'indicator_codes': indicator_codes,
             'countries': countries,
@@ -1283,10 +1276,10 @@ async def rank_country_changes(
     if metric not in ("absolute_change", "percent_change", "cagr"):
         raise ValueError("metric must be one of absolute_change, percent_change, or cagr.")
     top = max(1, min(top, 200))
-    merged_countries = await _merge_countries(
-        countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, countries=countries, country_group=country_group
+    )
     rows = store.indicator_trends(
         indicator_code,
         countries=merged_countries,
@@ -1317,8 +1310,8 @@ async def rank_country_changes(
     warning = _period_warning(ranked)
     if warning:
         result.setdefault("warnings", []).append(warning)
-    result["source"] = provenance(
-        workbook=store.path, operation="rank_country_changes",
+    result["source"] = store.provenance(
+        operation="rank_country_changes",
         params={
             'indicator_code': indicator_code,
             'countries': countries,
@@ -1352,10 +1345,10 @@ async def assess_data_quality(
 ) -> dict[str, Any]:
     """Summarize metadata, availability, and cautions for an indicator/filter."""
     top = max(1, min(top, 100))
-    merged_countries = await _merge_countries(
-        country=country, countries=countries, country_group=country_group
-    )
     store = await get_store()
+    merged_countries = await _merge_countries(
+        store, country=country, countries=countries, country_group=country_group
+    )
     result = store.quality_assessment(
         indicator_code,
         countries=merged_countries,
@@ -1366,8 +1359,7 @@ async def assess_data_quality(
         top=top,
     )
     result["country_group"] = country_group
-    result["source"] = provenance(
-        workbook=store.path,
+    result["source"] = store.provenance(
         operation="assess_data_quality",
         params={
             "indicator_code": indicator_code,
@@ -1404,8 +1396,7 @@ async def country_profile(
         "country_code": code,
         "country_name": countries[code]["country_name"],
         "reference_year": year,
-        "source": provenance(
-            workbook=store.path,
+        "source": store.provenance(
             operation="country_profile",
             params={
                 "country": country,

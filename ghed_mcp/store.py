@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from filelock import FileLock
-from .client import GHEDError
+from .client import GHEDError, provenance
 from openpyxl import load_workbook
 
 from .methodology import ADDITIVE_RELATIONSHIPS
@@ -242,15 +242,25 @@ class GHEDStore:
         return load_workbook(self.path, read_only=True, data_only=True)
 
     def _connect(self) -> sqlite3.Connection:
-        stat = self.sqlite_path.stat()
-        identity = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
-        if self._conn is not None and getattr(self, "_connection_identity", identity) != identity:
-            self.close()
+        # Keep a store on one SQLite snapshot, even if another process replaces
+        # the cache. get_store creates a new instance when the workbook changes.
         if self._conn is None:
             self._conn = sqlite3.connect(self.sqlite_path)
             self._conn.row_factory = sqlite3.Row
-            self._connection_identity = identity
         return self._conn
+
+    def snapshot_signature(self) -> dict[str, Any]:
+        """Identify the workbook that produced this connection's data."""
+        row = self._connect().execute(
+            "select value from manifest where key = 'source_signature'"
+        ).fetchone()
+        return json.loads(row[0])
+
+    def provenance(self, *, operation: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return provenance(
+            workbook=self.path, operation=operation, params=params,
+            source_signature=self.snapshot_signature(),
+        )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -287,6 +297,7 @@ class GHEDStore:
 
     def ensure_sqlite(self) -> None:
         """Build or reuse the derived SQLite cache."""
+        self.close()
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(self.sqlite_path) + ".lock", timeout=600):
             signature = self._source_signature()
@@ -551,7 +562,7 @@ class GHEDStore:
 
     def cache_status(self) -> dict[str, Any]:
         signature = self._source_signature()
-        manifest = self._stored_manifest()
+        manifest = self.snapshot_signature()
         conn = self._connect()
         counts = {
             "countries": conn.execute("select count(*) from countries").fetchone()[0],

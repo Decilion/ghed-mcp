@@ -1180,7 +1180,97 @@ async def test_worker_built_stores_query_on_event_loop_after_refresh(monkeypatch
     wb.close()
     second = await REAL_GET_STORE(refresh=True)
     assert second.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
-    assert first.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
+    assert first.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 8.3
     first.close()
     second.close()
     server._store_for_path.cache_clear()
+
+
+async def test_group_query_and_provenance_keep_one_replaced_cache_snapshot(monkeypatch, sample_workbook):
+    from openpyxl import load_workbook
+    store = server.GHEDStore(sample_workbook)
+    signature = store.snapshot_signature()
+    calls = 0
+    async def get_store(refresh=False):
+        nonlocal calls
+        calls += 1
+        return store
+    original_data = store.indicator_data
+    replacements = []
+    def replace_then_query(*args, **kwargs):
+        wb = load_workbook(sample_workbook)
+        wb['Data']['F3'] = 9.9
+        wb.save(sample_workbook)
+        wb.close()
+        replacements.append(server.GHEDStore(sample_workbook))
+        return original_data(*args, **kwargs)
+    monkeypatch.setattr(server, 'get_store', get_store)
+    monkeypatch.setattr(store, 'indicator_data', replace_then_query)
+    try:
+        result = await server.compare_country_group('che_gdp', country_group='LAC')
+        assert calls == 1
+        col = next(row for row in result['rows'] if row['country_code'] == 'COL')
+        assert col['value'] == 8.3
+        assert result['source']['dataset_signature'] == signature
+        assert store.cache_status()['sqlite_current'] is False
+        assert replacements[0].indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
+        assert replacements[0].snapshot_signature() != signature
+    finally:
+        store.close()
+        for replacement in replacements:
+            replacement.close()
+
+
+async def test_discovery_tool_responds_during_cache_rebuild(monkeypatch, sample_workbook):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    started, release = threading.Event(), threading.Event()
+    async def workbook(refresh=False):
+        return sample_workbook
+    def blocked_store(_path, _signature):
+        started.set()
+        assert release.wait(timeout=5)
+        return SimpleNamespace(path=sample_workbook)
+    monkeypatch.setattr(server, 'ensure_workbook', workbook)
+    monkeypatch.setattr(server, '_store_for_path', blocked_store)
+    monkeypatch.setattr(server, '_store_lock', asyncio.Lock())
+    task = asyncio.create_task(REAL_GET_STORE(refresh=True))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        result = await asyncio.wait_for(server.topics_index(), timeout=1)
+        assert result
+        assert not task.done()
+    finally:
+        release.set()
+        await task
+
+
+async def test_discovery_tool_responds_during_workbook_validation(monkeypatch, sample_workbook, tmp_path):
+    import asyncio
+    import threading
+    from ghed_mcp import client
+    payload = sample_workbook.read_bytes()
+    target = tmp_path / 'validated.xlsx'
+    started, release = threading.Event(), threading.Event()
+    original_validate = client.validate_workbook
+    async def stream(_url, destination):
+        destination.write_bytes(payload)
+    def blocked_validate(path):
+        started.set()
+        assert release.wait(timeout=5)
+        original_validate(path)
+    monkeypatch.setattr(client, '_stream_to_file', stream)
+    monkeypatch.setattr(client, 'validate_workbook', blocked_validate)
+    task = asyncio.create_task(client.download_workbook(
+        destination=target, source_url='https://example.test/data'
+    ))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        assert await asyncio.wait_for(server.topics_index(), timeout=1)
+        assert not target.exists()
+        assert not task.done()
+    finally:
+        release.set()
+        await task
+    original_validate(target)

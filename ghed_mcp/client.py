@@ -276,7 +276,7 @@ async def download_workbook(
             tmp = Path(fh.name)
         try:
             await _stream_to_file(source_url, tmp)
-            validate_workbook(tmp)
+            await asyncio.to_thread(validate_workbook, tmp)
             tmp.replace(dest)
             if doc is not None:
                 write_source_manifest(doc)
@@ -343,13 +343,19 @@ def provenance(
     workbook: Path | None = None,
     operation: str,
     params: dict[str, Any] | None = None,
+    source_signature: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build source metadata for data-returning tool responses."""
     path = workbook or workbook_path()
     retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     modified_at = None
     size_bytes = None
-    if path.exists():
+    if source_signature is not None:
+        modified_at = datetime.fromtimestamp(
+            source_signature["workbook_mtime_ns"] / 1_000_000_000, timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        size_bytes = source_signature["workbook_size_bytes"]
+    elif path.exists():
         stat = path.stat()
         modified_at = datetime.fromtimestamp(
             stat.st_mtime, timezone.utc
@@ -362,6 +368,7 @@ def provenance(
         "workbook_path": str(path),
         "workbook_modified_at": modified_at,
         "workbook_size_bytes": size_bytes,
+        **({"dataset_signature": dict(source_signature)} if source_signature is not None else {}),
         "operation": operation,
         "params": dict(params or {}),
         "retrieved_at": retrieved_at,

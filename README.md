@@ -99,9 +99,13 @@ panels, trends and rankings include workbook provenance and query parameters.
 
 Downloads are serialized across processes, checked for archive integrity and
 required worksheet layouts, then atomically replace the workbook. Invalid
-downloads preserve the existing cache. SQLite rebuilds run off the MCP event loop, are serialized separately,
+downloads preserve the existing cache. Workbook validation and SQLite rebuilds
+run off the MCP event loop. Rebuilds are serialized separately
 and detect source changes; an interrupted or incompatible workbook produces an
-actionable error. Other running clients detect replacement of the derived cache.
+actionable error. Data requests wait for an active rebuild while the MCP event
+loop remains responsive. Each store keeps one SQLite snapshot, and response
+provenance identifies the workbook signature behind that snapshot. Later requests
+detect a changed workbook and open the refreshed cache.
 An update during a rebuild can require retrying the query. `refresh_cache` remains
 an explicit operation; ordinary queries do not check WHO for new releases.
 

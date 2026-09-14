@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Accept the documented null category in indicator search and include provenance
   in workbook-backed discovery, panels, trends, rankings and accounting outputs.
 - Validate workbook downloads before replacing a good cache, serialize downloads
-  and rebuilds across processes, run rebuilds off the MCP event loop,
-  and reopen replaced SQLite caches.
+  and rebuilds across processes, run validation and rebuilds off the MCP event loop,
+  and adopt refreshed caches between requests while retaining a consistent
+  data and provenance snapshot within each request.
 - Require MCP SDK >=1.15.0 for annotation-compatible tool registration and exclude
   incompatible SDK 2.x.
   Verify installed wheels outside the source checkout and reject AGENTS.md in sdists.
