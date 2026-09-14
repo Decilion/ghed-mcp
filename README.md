@@ -82,6 +82,32 @@ Restart your client. The `ghed` server should appear with all tools, the `ghed:/
 
 The first call downloads the GHED all-data workbook (~30 MB) and builds a derived SQLite cache under `~/.cache/ghed-mcp/`. This takes 2–3 minutes on a fresh laptop; subsequent calls are instant. Set `GHED_MCP_CACHE_DIR` to relocate.
 
+## Research correctness and cache behavior
+
+Curated group members are matched against exact workbook ISO3 codes. Responses
+include `country_group_resolution` with supported and unsupported members; an
+empty resolved group returns no data. Explicit country lists, region and income
+filters use the same intersection for extracts and quality assessments. Exact
+country names take precedence over partial-name matching, and three-letter
+inputs are treated as ISO3 codes regardless of case.
+
+Accounting breakdowns report `complete`, `missing_children`, and
+`balance_status` (`balanced`, `unbalanced`, or `incomplete`). `balanced` is null
+when a parent or component is missing. Missing values are not assumed to be
+zero; a fully observed zero parent and zero components can balance. Research
+panels, trends and rankings include workbook provenance and query parameters.
+
+Downloads are serialized across processes, checked for archive integrity and
+required worksheet layouts, then atomically replace the workbook. Invalid
+downloads preserve the existing cache. SQLite rebuilds run off the MCP event loop, are serialized separately,
+and detect source changes; an interrupted or incompatible workbook produces an
+actionable error. Other running clients detect replacement of the derived cache.
+An update during a rebuild can require retrying the query. `refresh_cache` remains
+an explicit operation; ordinary queries do not check WHO for new releases.
+
+The server uses the FastMCP API from MCP SDK 1.x (`mcp>=1.15.0,<2`). SDK 2.x is
+excluded because it changes that server API. Cache locking uses `filelock`.
+
 ## Tool reference
 
 Tool signatures show the **canonical parameter names** — the server rejects unknown kwargs (Pydantic `extra="forbid"`), so getting the names right matters. In particular: `country` is singular, `countries` is the list form, year filters are `year_start` / `year_end` (not `year_from` / `year_to`).
@@ -213,7 +239,8 @@ The `LAST_VERIFIED` constant in `country_groups.py` records when each list was l
 
 Re-check annually. Known upcoming changes at the time of writing: Bangladesh, Lao PDR, and Nepal are scheduled to graduate from LDC status on 2026-11-24; Solomon Islands on 2027-12-13.
 
-The same `country_groups.py` file lives in both `ghed-mcp` and `gho-mcp` (canonical source: `ghed-mcp`), so a regional analysis behaves identically against either database.
+The same `country_groups.py` file lives in both `ghed-mcp` and `gho-mcp` (canonical source: `ghed-mcp`), so both servers start from the same definitions. Actual supported membership
+can differ by database; inspect the reported unsupported codes before combining extracts.
 
 ## Examples
 

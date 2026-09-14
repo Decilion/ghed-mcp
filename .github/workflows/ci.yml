@@ -12,6 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+        mcp: ["minimum", "latest"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,6 +20,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]"
+      - if: matrix.mcp == 'minimum'
+        run: pip install "mcp==1.15.0" "filelock==3.16.0"
       - run: pytest -v
 
   build:
@@ -49,7 +52,7 @@ jobs:
               names = t.getnames()
           required = ['assets/decilion-banner.png', 'assets/decilion-banner.svg',
                       'LICENSE', 'README.md', 'CHANGELOG.md']
-          forbidden = ['AGENT.md', 'CLAUDE.md', 'dev-notes/']
+          forbidden = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md', 'dev-notes/']
           missing = [r for r in required if not any(r in n for n in names)]
           leaked = [f for f in forbidden if any(f in n for n in names)]
           if missing:
@@ -63,9 +66,10 @@ jobs:
           python -m venv /tmp/wheelvenv
           /tmp/wheelvenv/bin/pip install --upgrade pip
           /tmp/wheelvenv/bin/pip install dist/mcp_server_ghed-*-py3-none-any.whl
-          /tmp/wheelvenv/bin/python -c "import importlib.metadata as md, ghed_mcp; \
+          cd /tmp
+          /tmp/wheelvenv/bin/python -I -c "import importlib.metadata as md, ghed_mcp; \
             assert md.version('mcp-server-ghed') == ghed_mcp.__version__"
-          /tmp/wheelvenv/bin/python -c "from ghed_mcp.server import mcp; \
+          /tmp/wheelvenv/bin/python -I -c "from ghed_mcp.server import mcp; \
             assert type(mcp).__name__ == 'FastMCP'"
       - uses: actions/upload-artifact@v4
         with:

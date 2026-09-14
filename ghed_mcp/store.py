@@ -9,12 +9,15 @@ import re
 import sqlite3
 import statistics
 import time
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from filelock import FileLock
+from .client import GHEDError
 from openpyxl import load_workbook
 
 from .methodology import ADDITIVE_RELATIONSHIPS
@@ -239,9 +242,14 @@ class GHEDStore:
         return load_workbook(self.path, read_only=True, data_only=True)
 
     def _connect(self) -> sqlite3.Connection:
+        stat = self.sqlite_path.stat()
+        identity = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        if self._conn is not None and getattr(self, "_connection_identity", identity) != identity:
+            self.close()
         if self._conn is None:
             self._conn = sqlite3.connect(self.sqlite_path)
             self._conn.row_factory = sqlite3.Row
+            self._connection_identity = identity
         return self._conn
 
     def close(self) -> None:
@@ -261,14 +269,15 @@ class GHEDStore:
     def _stored_manifest(self) -> dict[str, Any] | None:
         if not self.sqlite_path.exists():
             return None
+        conn = sqlite3.connect(self.sqlite_path)
         try:
-            conn = sqlite3.connect(self.sqlite_path)
             row = conn.execute(
                 "select value from manifest where key = 'source_signature'"
             ).fetchone()
-            conn.close()
         except sqlite3.Error:
             return None
+        finally:
+            conn.close()
         if not row:
             return None
         try:
@@ -278,19 +287,19 @@ class GHEDStore:
 
     def ensure_sqlite(self) -> None:
         """Build or reuse the derived SQLite cache."""
-        signature = self._source_signature()
-        if self._stored_manifest() == signature:
-            return
-        self.rebuild_sqlite(signature)
+        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self.sqlite_path) + ".lock", timeout=600):
+            signature = self._source_signature()
+            if self._stored_manifest() != signature:
+                self.rebuild_sqlite(signature)
 
     def rebuild_sqlite(self, signature: dict[str, Any] | None = None) -> None:
         """Rebuild the derived SQLite database from the cached workbook."""
         self.close()
         signature = signature or self._source_signature()
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.sqlite_path.with_suffix(".sqlite.tmp")
-        if tmp.exists():
-            tmp.unlink()
+        with tempfile.NamedTemporaryFile(dir=self.sqlite_path.parent, suffix=".sqlite.tmp", delete=False) as fh:
+            tmp = Path(fh.name)
 
         logger.info("Rebuilding SQLite cache from %s", self.path)
         started = time.monotonic()
@@ -301,12 +310,18 @@ class GHEDStore:
             conn.execute("pragma temp_store = memory")
             self._create_schema(conn)
             self._load_workbook_into(conn, signature)
+            if signature != self._source_signature():
+                raise GHEDError("Workbook changed during cache rebuild; retry the query.")
             conn.commit()
-        except Exception:
+        except Exception as exc:
             conn.close()
-            if tmp.exists():
-                tmp.unlink()
-            raise
+            tmp.unlink(missing_ok=True)
+            if isinstance(exc, GHEDError):
+                raise
+            raise GHEDError(
+                f"Could not build GHED cache: {exc}. Call refresh_cache to download a valid workbook.",
+                path=str(self.path),
+            ) from exc
         counts = {
             "countries": conn.execute("select count(*) from countries").fetchone()[0],
             "indicators": conn.execute("select count(*) from indicators").fetchone()[0],
@@ -863,6 +878,7 @@ class GHEDStore:
 
     def find_countries(self, query: str) -> list[dict[str, Any]]:
         needle = query.lower().strip()
+        needle = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{needle}%"
         conn = self._connect()
         alias_code = COUNTRY_ALIASES.get(_alias_key(query))
@@ -874,7 +890,7 @@ class GHEDStore:
             f"""
             select country_code, country_name, region, income
             from countries
-            where lower(country_code) like ? or lower(country_name) like ?{alias_clause}
+            where lower(country_code) like ? escape '\\' or lower(country_name) like ? escape '\\'{alias_clause}
             order by country_name
             """,
             params,
@@ -903,14 +919,24 @@ class GHEDStore:
         if row:
             return row["country_code"]
 
+        exact = conn.execute(
+            "select country_code from countries where lower(country_name) = ?",
+            (value.lower(),),
+        ).fetchone()
+        if exact:
+            return exact["country_code"]
+        # Three letters are an explicit ISO3 code, never a name fragment.
+        if len(value) == 3 and value.isascii() and value.isalpha():
+            raise ValueError(f"Unknown ISO3 country code '{country}'.")
+        needle = value.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         matches = conn.execute(
             """
             select country_code, country_name
             from countries
-            where lower(country_name) like ?
+            where lower(country_name) like ? escape '\\'
             order by country_name
             """,
-            (f"%{value.lower()}%",),
+            (f"%{needle}%",),
         ).fetchall()
         if len(matches) == 1:
             return matches[0]["country_code"]
@@ -948,12 +974,12 @@ class GHEDStore:
         incomes = self.normalize_income(income)
 
         resolved = None
-        if countries:
+        if countries is not None:
             resolved = [self.resolve_country(c) for c in countries]
 
         where = ["o.indicator_code = ?"]
         params: list[Any] = [indicator_code]
-        if resolved:
+        if resolved is not None:
             placeholders = ", ".join("?" for _ in resolved)
             where.append(f"o.country_code in ({placeholders})")
             params.extend(resolved)
@@ -1046,12 +1072,12 @@ class GHEDStore:
         region = self.normalize_region(region)
         incomes = self.normalize_income(income)
         resolved = None
-        if countries:
+        if countries is not None:
             resolved = [self.resolve_country(c) for c in countries]
 
         where = [f"o.indicator_code in ({', '.join('?' for _ in indicator_codes)})"]
         params: list[Any] = list(indicator_codes)
-        if resolved:
+        if resolved is not None:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
         if region:
@@ -1118,12 +1144,12 @@ class GHEDStore:
         region = self.normalize_region(region)
         incomes = self.normalize_income(income)
         resolved = None
-        if countries:
+        if countries is not None:
             resolved = [self.resolve_country(c) for c in countries]
 
         where = [f"o.indicator_code in ({', '.join('?' for _ in indicator_codes)})"]
         params: list[Any] = list(indicator_codes)
-        if resolved:
+        if resolved is not None:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
         if region:
@@ -1284,12 +1310,12 @@ class GHEDStore:
         latest_only: bool = True,
         top_n: int = 5,
     ) -> dict[str, Any]:
-        if not countries and not region and not income:
+        if countries is None and not region and not income:
             raise ValueError(
                 "Pass at least one of 'countries', 'region', or 'income'."
             )
         common = dict(
-            countries=list(countries) if countries else None,
+            countries=list(countries) if countries is not None else None,
             region=region,
             income=income,
         )
@@ -1319,7 +1345,7 @@ class GHEDStore:
         )
         years = sorted({row["year"] for row in rows if row.get("year") is not None})
         countries_in_group = self.countries(region=region, income=income)
-        if countries:
+        if countries is not None:
             country_set = {self.resolve_country(c) for c in countries}
             countries_in_group = [
                 c for c in countries_in_group if c["country_code"] in country_set
@@ -1370,12 +1396,12 @@ class GHEDStore:
         region = self.normalize_region(region)
         incomes = self.normalize_income(income)
         resolved = None
-        if countries:
+        if countries is not None:
             resolved = [self.resolve_country(c) for c in countries]
 
         where = ["o.indicator_code = ?"]
         params: list[Any] = [indicator_code]
-        if resolved:
+        if resolved is not None:
             where.append(f"o.country_code in ({', '.join('?' for _ in resolved)})")
             params.extend(resolved)
         if region:
@@ -1453,22 +1479,14 @@ class GHEDStore:
         if country:
             requested.append(country)
         group_countries = self.countries(region=region, income=income)
-        if requested:
-            target_codes = [self.resolve_country(item) for item in requested]
-        elif region or income:
-            target_codes = [row["country_code"] for row in group_countries]
-        else:
-            target_codes = []
-
-        metadata_rows = self.country_metadata(
-            indicator_code=indicator_code,
-            top=100000,
-        )
-        if target_codes:
-            target_set = set(target_codes)
-            metadata_rows = [
-                row for row in metadata_rows if row["country_code"] in target_set
-            ]
+        target_set = {row["country_code"] for row in group_countries}
+        if country is not None or countries is not None:
+            target_set &= {self.resolve_country(item) for item in requested}
+        target_codes = sorted(target_set)
+        metadata_rows = [
+            row for row in self.country_metadata(indicator_code=indicator_code, top=100000)
+            if row["country_code"] in target_set
+        ]
         data_types: dict[str, int] = {}
         source_count = 0
         estimation_notes = 0
@@ -1484,9 +1502,9 @@ class GHEDStore:
 
         availability = self.data_availability(
             [indicator_code],
-            countries=target_codes or None,
-            region=region if not target_codes else None,
-            income=income if not target_codes else None,
+            countries=target_codes,
+            region=region,
+            income=income,
             year_start=year_start,
             year_end=year_end,
         )[0]
@@ -1742,9 +1760,11 @@ class GHEDStore:
                 ),
             })
 
-        difference = None if parent_value is None else child_sum - float(parent_value)
+        missing_children = [child["indicator_code"] for child in children if child["value"] is None]
+        complete = parent_value is not None and not missing_children
+        difference = None if not complete else child_sum - float(parent_value)
         relative_difference = (
-            None if parent_value in (None, 0)
+            None if difference is None or parent_value == 0
             else difference / float(parent_value)
         )
         return {
@@ -1761,9 +1781,16 @@ class GHEDStore:
             "child_sum": child_sum,
             "difference": difference,
             "relative_difference": relative_difference,
+            "complete": complete,
+            "missing_children": missing_children,
+            "balance_status": (
+                "incomplete" if not complete else
+                "balanced" if abs(difference) <= max(1e-9, abs(float(parent_value)) * 1e-6)
+                else "unbalanced"
+            ),
             "balanced": (
-                False if relative_difference is None
-                else abs(relative_difference) < 1e-6
+                None if not complete else
+                abs(difference) <= max(1e-9, abs(float(parent_value)) * 1e-6)
             ),
             "caution": (
                 "Only current-NCU amount variables are additive. Percentages, per-capita "

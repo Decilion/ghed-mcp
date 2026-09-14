@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+import tempfile
+import time
+import zipfile
 import logging
 import os
 import re
@@ -10,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from filelock import FileLock, Timeout
+from openpyxl import load_workbook
 
 logger = logging.getLogger("ghed_mcp.client")
 
@@ -191,47 +197,102 @@ def write_source_manifest(document: dict[str, Any]) -> None:
         "source_document": normalize_source_document(document),
         "downloaded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, suffix=".json", delete=False) as fh:
+        tmp = Path(fh.name)
+        json.dump(payload, fh, indent=2, sort_keys=True)
+    try:
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@asynccontextmanager
+async def _download_lock(destination: Path):
+    """Cross-process lock, polled without blocking the MCP event loop."""
+    lock = FileLock(str(destination) + ".download.lock")
+    deadline = time.monotonic() + 600
+    while True:
+        try:
+            lock.acquire(timeout=0)
+            break
+        except Timeout:
+            if time.monotonic() >= deadline:
+                raise GHEDError("Timed out waiting for another workbook download.")
+            await asyncio.sleep(0.05)
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def validate_workbook(path: Path) -> None:
+    """Reject corrupt archives and incompatible workbook layouts before replacement."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if archive.testzip() is not None:
+                raise ValueError("Archive checksum failed")
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            required = {"Data", "Codebook", "Metadata", "Version"}
+            if not required.issubset(wb.sheetnames):
+                raise ValueError("Missing required GHED worksheets")
+            data = next(wb["Data"].iter_rows(values_only=True))
+            if tuple(str(v).lower() for v in data[:5]) != ("location", "code", "region", "income", "year"):
+                raise ValueError("Unrecognized Data column layout")
+            codebook = next(wb["Codebook"].iter_rows(values_only=True))
+            metadata = next(wb["Metadata"].iter_rows(values_only=True))
+            if len(codebook) < 8 or str(codebook[0]).lower() != "variable code":
+                raise ValueError("Unrecognized Codebook column layout")
+            if len(metadata) < 12 or tuple(str(v).lower() for v in metadata[:5]) != (
+                "location", "code", "region", "income", "variable code"
+            ):
+                raise ValueError("Unrecognized Metadata column layout")
+        finally:
+            wb.close()
+    except Exception as exc:
+        raise GHEDError(
+            f"Invalid GHED workbook: {exc}. Existing cache was preserved.",
+            path=str(path),
+        ) from exc
 
 
 async def download_workbook(
     *,
     destination: Path | None = None,
     source_url: str | None = None,
+    if_missing: bool = False,
 ) -> Path:
-    """Download the public GHED workbook into the local cache."""
+    """Validate and atomically replace the cache under a cross-process lock."""
     dest = destination or workbook_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".tmp")
-    doc = None
-    if source_url is None:
-        doc = await get_latest_all_data_document()
-        source_url = document_download_url(doc["Identifier"])
-
-    logger.info("Downloading GHED workbook from %s", source_url)
-    try:
-        await _stream_to_file(source_url, tmp)
-    except httpx.HTTPStatusError as e:
-        raise GHEDError(
-            f"HTTP {e.response.status_code} downloading GHED workbook: "
-            f"{e.response.reason_phrase}",
-            status=e.response.status_code,
-            source_url=source_url,
-            path=str(dest),
-        ) from e
-    except httpx.HTTPError as e:
-        raise GHEDError(
-            f"Network error downloading GHED workbook: {e}",
-            source_url=source_url,
-            path=str(dest),
-        ) from e
-
-    tmp.replace(dest)
-    if doc is not None:
-        write_source_manifest(doc)
-    size_mb = dest.stat().st_size / (1024 * 1024)
-    logger.info("Downloaded GHED workbook to %s (%.1f MB)", dest, size_mb)
-    return dest
+    async with _download_lock(dest):
+        if if_missing and dest.exists():
+            return dest
+        doc = None
+        if source_url is None:
+            doc = await get_latest_all_data_document()
+            source_url = document_download_url(doc["Identifier"])
+        with tempfile.NamedTemporaryFile(dir=dest.parent, suffix=".xlsx", delete=False) as fh:
+            tmp = Path(fh.name)
+        try:
+            await _stream_to_file(source_url, tmp)
+            validate_workbook(tmp)
+            tmp.replace(dest)
+            if doc is not None:
+                write_source_manifest(doc)
+            logger.info("Downloaded validated GHED workbook to %s", dest)
+            return dest
+        except httpx.HTTPStatusError as exc:
+            raise GHEDError(
+                f"HTTP {exc.response.status_code} downloading GHED workbook",
+                status=exc.response.status_code, source_url=source_url, path=str(dest),
+            ) from exc
+        except (httpx.HTTPError, OSError) as exc:
+            raise GHEDError(
+                f"Failed to download GHED workbook: {exc}", source_url=source_url, path=str(dest),
+            ) from exc
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 async def _stream_to_file(source_url: str, destination: Path) -> None:
@@ -273,7 +334,7 @@ async def ensure_workbook(refresh: bool = False) -> Path:
     """Return a cached workbook path, downloading it when missing or refreshed."""
     path = workbook_path()
     if refresh or not path.exists():
-        return await download_workbook(destination=path)
+        return await download_workbook(destination=path, if_missing=not refresh)
     return path
 
 

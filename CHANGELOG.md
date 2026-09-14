@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Resolve curated ISO3 codes exactly, report unsupported members, and preserve
+  empty country selections. Exact country names take precedence over fragments.
+- Apply identical country, region and income intersections to data and quality
+  assessments, including empty populations.
+- Mark accounting breakdowns incomplete when any component is absent and handle
+  fully observed zero-valued parents without false failures.
+- Accept the documented null category in indicator search and include provenance
+  in workbook-backed discovery, panels, trends, rankings and accounting outputs.
+- Validate workbook downloads before replacing a good cache, serialize downloads
+  and rebuilds across processes, run rebuilds off the MCP event loop,
+  and reopen replaced SQLite caches.
+- Require MCP SDK >=1.15.0 for annotation-compatible tool registration and exclude
+  incompatible SDK 2.x.
+  Verify installed wheels outside the source checkout and reject AGENTS.md in sdists.
+
+### Added
+- Focused regression tests for wrong regional membership, inconsistent filters,
+  missing accounting data, MCP schema behavior and cache replacement safety.
+
 ## [0.5.1] — 2026-05-06
 
 ### Changed

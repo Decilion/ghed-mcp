@@ -1,6 +1,7 @@
 """FastMCP server for GHED workbook analysis."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from functools import lru_cache
@@ -34,24 +35,29 @@ async def _merge_countries(
     """Combine explicit country / countries with a curated country_group.
 
     User-supplied `country` / `countries` pass through as-is (the store
-    layer strict-resolves them, raising on typos). `country_group` members
-    are soft-resolved against the workbook here — ISO3 codes the workbook
-    doesn't have are silently dropped, because curated groups
+    layer strict-resolves them, raising on typos). Curated members use exact
+    workbook ISO3 matches. Unsupported codes are omitted and reported through
+    country_group_resolution, because curated groups
     deliberately span more economies than GHED publishes (e.g.
     LAC_TERRITORIES includes Aruba and Curaçao, which aren't in GHED).
 
     Returns the union (deduplicated, order-preserving), or None when no
-    spatial filter was supplied. User-supplied entries keep their original
+    spatial filter was supplied; [] preserves an explicitly empty selection.
+    User-supplied entries keep their original
     spelling so that downstream displays like `countries_resolved` can
     show the input → ISO3 mapping. Curated-group entries are pre-resolved
     to ISO3.
     """
+    if country is None and countries is None and country_group is None:
+        return None
+    store = await get_store()
     seen: set[str] = set()
     out: list[str] = []
 
     def _add(value: str) -> None:
-        if value not in seen:
-            seen.add(value)
+        code = store.resolve_country(value)
+        if code not in seen:
+            seen.add(code)
             out.append(value)
 
     if country:
@@ -60,15 +66,25 @@ async def _merge_countries(
         for c in countries:
             _add(c)
     if country_group:
-        store = await get_store()
-        members = resolve_country_group(country_group)["members"]
-        for c in members:
-            try:
-                code = store.resolve_country(c)
-            except ValueError:
-                continue
+        coverage = _group_report(store, country_group)["country_group_resolution"]
+        for code in coverage["resolved_members"]:
             _add(code)
-    return out or None
+    return out
+
+
+def _group_report(store: GHEDStore, group: str | None) -> dict[str, Any]:
+    """Resolve curated ISO3 members exactly, reporting unsupported economies."""
+    if group is None:
+        return {}
+    definition = resolve_country_group(group)
+    available = {row["country_code"] for row in store.countries()}
+    members = definition["members"]
+    return {"country_group_resolution": {
+        "code": definition["code"],
+        "last_verified": COUNTRY_GROUPS_LAST_VERIFIED,
+        "resolved_members": [code for code in members if code in available],
+        "unsupported_members": [code for code in members if code not in available],
+    }}
 from .methodology import (
     RESEARCH_USE_CASES,
     TOPICS,
@@ -100,15 +116,24 @@ WRITE_EXTERNAL = ToolAnnotations(
 
 
 @lru_cache(maxsize=1)
-def _store_for_path(path: str) -> GHEDStore:
+def _store_for_path(path: str, signature: tuple[int, int]) -> GHEDStore:
+    # The signature is part of the cache key. Construct a fresh store for a new
+    # workbook so rebuilding in a worker never closes a connection in use by
+    # another tool on the event loop.
     return GHEDStore(path)
+
+
+_store_lock = asyncio.Lock()
 
 
 async def get_store(refresh: bool = False) -> GHEDStore:
     path = await ensure_workbook(refresh=refresh)
-    if refresh:
-        _store_for_path.cache_clear()
-    return _store_for_path(str(path))
+    async with _store_lock:
+        stat = path.stat()
+        signature = (stat.st_size, stat.st_mtime_ns)
+        # File-lock waiting and XLSX ingestion can take minutes. Queries open
+        # their SQLite connection lazily back on the event-loop thread.
+        return await asyncio.to_thread(_store_for_path, str(path), signature)
 
 
 @mcp.tool(annotations=WRITE_EXTERNAL)
@@ -118,25 +143,27 @@ async def refresh_cache() -> dict[str, Any]:
         store = await get_store(refresh=True)
     except GHEDError as e:
         return e.to_dict()
-    return {
+    result = {
         "ok": True,
         "source": provenance(workbook=store.path, operation="refresh_cache"),
         "source_document": read_source_manifest(),
         "cache": store.cache_status(),
         "version": store.version(),
     }
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
 async def cache_status() -> dict[str, Any]:
     """Return local workbook and derived SQLite cache status."""
     store = await get_store()
-    return {
+    result = {
         "source": provenance(workbook=store.path, operation="cache_status"),
         "source_document": read_source_manifest(),
         "cache": store.cache_status(),
         "version": store.version(),
     }
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -159,7 +186,7 @@ async def check_for_updates() -> dict[str, Any]:
 async def version() -> dict[str, Any]:
     """Return workbook version lines and cache provenance."""
     store = await get_store()
-    return {
+    result = {
         "source": provenance(workbook=store.path, operation="version"),
         "cache": {
             "sqlite_path": str(store.sqlite_path),
@@ -167,17 +194,24 @@ async def version() -> dict[str, Any]:
         },
         "version": store.version(),
     }
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
 async def methodology_guide() -> dict[str, Any]:
     """Explain how GHED variables are organized and how to choose the right series."""
     store = await get_store()
-    return {
+    result = {
         **methodology_summary(),
         "current_counts": store.indicator_categories(),
         "version": store.version(),
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="methodology_guide",
+        params={
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -202,7 +236,13 @@ async def suggest_variables_for_research_question(question: str) -> dict[str, An
 async def list_variable_categories() -> dict[str, Any]:
     """List GHED variable category counts from the Codebook."""
     store = await get_store()
-    return store.indicator_categories()
+    result = store.indicator_categories()
+    result["source"] = provenance(
+        workbook=store.path, operation="list_variable_categories",
+        params={
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -212,7 +252,7 @@ async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
     skip = max(0, skip)
     store = await get_store()
     items = store.indicators(category_1="INDICATORS", skip=skip, top=top)
-    return {
+    result = {
         "scope": "headline_indicators",
         "category_1": "INDICATORS",
         "count": len(items),
@@ -221,6 +261,14 @@ async def list_indicators(skip: int = 0, top: int = 50) -> dict[str, Any]:
         "top": top,
         "items": items,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="list_indicators",
+        params={
+            'skip': skip,
+            'top': top,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -240,7 +288,7 @@ async def list_variables(
         skip=skip,
         top=top,
     )
-    return {
+    result = {
         "scope": "all_codebook_variables",
         "category_1": category_1,
         "category_2": category_2,
@@ -250,13 +298,23 @@ async def list_variables(
         "top": top,
         "items": items,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="list_variables",
+        params={
+            'category_1': category_1,
+            'category_2': category_2,
+            'skip': skip,
+            'top': top,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
 async def search_indicators(
     query: str,
     top: int = 50,
-    category_1: str = "INDICATORS",
+    category_1: str | None = "INDICATORS",
     category_2: str | None = None,
 ) -> dict[str, Any]:
     """Search headline GHED indicators by default; pass category_1=None for all variables."""
@@ -268,13 +326,23 @@ async def search_indicators(
         category_1=category_1,
         category_2=category_2,
     )
-    return {
+    result = {
         "query": query,
         "category_1": category_1,
         "category_2": category_2,
         "count": len(items),
         "items": items,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="search_indicators",
+        params={
+            'query': query,
+            'top': top,
+            'category_1': category_1,
+            'category_2': category_2,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -293,13 +361,23 @@ async def search_variables(
         category_1=category_1,
         category_2=category_2,
     )
-    return {
+    result = {
         "query": query,
         "category_1": category_1,
         "category_2": category_2,
         "count": len(items),
         "items": items,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="search_variables",
+        params={
+            'query': query,
+            'top': top,
+            'category_1': category_1,
+            'category_2': category_2,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -319,20 +397,36 @@ async def list_countries(
     if country_group:
         members = set(resolve_country_group(country_group)["members"])
         items = [c for c in items if c["country_code"] in members]
-    return {
+    result = {
         "region": region,
         "income": income,
         "country_group": country_group,
         "count": len(items),
         "items": items,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="list_countries",
+        params={
+            'region': region,
+            'income': income,
+            'country_group': country_group,
+        },
+    )
+    result.update(_group_report(store, country_group))
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
 async def list_country_groups() -> dict[str, Any]:
     """List GHED country grouping values by region and World Bank income class."""
     store = await get_store()
-    return store.country_groups()
+    result = store.country_groups()
+    result["source"] = provenance(
+        workbook=store.path, operation="list_country_groups",
+        params={
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -375,7 +469,15 @@ async def find_country_code(
         raise ValueError("Missing required 'country' parameter.")
     store = await get_store()
     matches = store.find_countries(query)
-    return {"query": query, "count": len(matches), "matches": matches}
+    result = {"query": query, "count": len(matches), "matches": matches}
+    result["source"] = provenance(
+        workbook=store.path, operation="find_country_code",
+        params={
+            'country': country,
+            'country_name': country_name,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -385,7 +487,14 @@ async def get_indicator_metadata(indicator_code: str) -> dict[str, Any]:
     metadata = store.get_indicator(indicator_code)
     if metadata is None:
         return {"indicator_code": indicator_code, "found": False}
-    return {"indicator_code": indicator_code, "found": True, "metadata": metadata}
+    result = {"indicator_code": indicator_code, "found": True, "metadata": metadata}
+    result["source"] = provenance(
+        workbook=store.path, operation="get_indicator_metadata",
+        params={
+            'indicator_code': indicator_code,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -398,12 +507,21 @@ async def get_country_metadata(
     top = max(1, min(top, 100))
     store = await get_store()
     rows = store.country_metadata(country=country, indicator_code=indicator_code, top=top)
-    return {
+    result = {
         "country": country,
         "indicator_code": indicator_code,
         "count": len(rows),
         "rows": rows,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="get_country_metadata",
+        params={
+            'country': country,
+            'indicator_code': indicator_code,
+            'top': top,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -431,7 +549,7 @@ async def data_availability(
         year_start=year_start,
         year_end=year_end,
     )
-    return {
+    result = {
         "indicator_codes": indicator_codes,
         "countries": countries,
         "country_group": country_group,
@@ -442,6 +560,20 @@ async def data_availability(
         "count": len(rows),
         "items": rows,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="data_availability",
+        params={
+            'indicator_codes': indicator_codes,
+            'countries': countries,
+            'country_group': country_group,
+            'region': region,
+            'income': income,
+            'year_start': year_start,
+            'year_end': year_end,
+        },
+    )
+    result.update(_group_report(store, country_group))
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -449,7 +581,7 @@ async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
     """Return known additive child relationships for a GHED variable."""
     store = await get_store()
     relationships = store.additive_relationships(indicator_code)
-    return {
+    result = {
         "indicator_code": indicator_code,
         "count": len(relationships),
         "relationships": relationships,
@@ -459,13 +591,27 @@ async def additive_hierarchy(indicator_code: str) -> dict[str, Any]:
             "variants as accounting identities."
         ),
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="additive_hierarchy",
+        params={
+            'indicator_code': indicator_code,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
 async def explain_indicator_relationship(indicator_code: str) -> dict[str, Any]:
     """Explain whether a variable is a total, component, ratio/share, or context series."""
     store = await get_store()
-    return store.explain_relationship(indicator_code)
+    result = store.explain_relationship(indicator_code)
+    result["source"] = provenance(
+        workbook=store.path, operation="explain_indicator_relationship",
+        params={
+            'indicator_code': indicator_code,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -477,12 +623,22 @@ async def build_additive_breakdown(
 ) -> dict[str, Any]:
     """Build and validate an additive breakdown for one country-year."""
     store = await get_store()
-    return store.breakdown(
+    result = store.breakdown(
         indicator_code,
         country=country,
         year=year,
         relationship_id=relationship_id,
     )
+    result["source"] = provenance(
+        workbook=store.path, operation="build_additive_breakdown",
+        params={
+            'indicator_code': indicator_code,
+            'country': country,
+            'year': year,
+            'relationship_id': relationship_id,
+        },
+    )
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -547,6 +703,21 @@ async def build_research_panel(
         result["csv"] = rows_to_csv(rows)
     else:
         result["rows"] = rows
+    result["source"] = provenance(
+        workbook=store.path, operation="build_research_panel",
+        params={
+            'indicator_codes': indicator_codes,
+            'countries': countries,
+            'country_group': country_group,
+            'region': region,
+            'income': income,
+            'year_start': year_start,
+            'year_end': year_end,
+            'top': top,
+            'format': format,
+        },
+    )
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -630,7 +801,7 @@ async def build_research_package(
         "- Inspect codebook.csv for units and measurement methods before combining variables.",
         "- Do not sum percentages, per-capita values, USD/PPP values, or constant-price series as accounting identities.",
     ])
-    return {
+    result = {
         "source": source,
         "indicator_codes": indicator_codes,
         "countries": countries,
@@ -647,6 +818,8 @@ async def build_research_package(
         "availability_csv": dicts_to_csv(availability),
         "readme": readme,
     }
+    result.update(_group_report(store, country_group))
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -716,6 +889,7 @@ async def get_indicator_data(
                 ),
                 "years_seen": sorted(years),
             })
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -739,7 +913,7 @@ async def compare_countries(
     merged = await _merge_countries(
         countries=countries, country_group=country_group
     )
-    if not merged:
+    if merged is None:
         raise ValueError(
             "Pass at least one of 'countries' or 'country_group'."
         )
@@ -794,6 +968,7 @@ async def compare_countries(
         result["csv"] = rows_to_csv(rows)
     else:
         result["rows"] = rows
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -826,12 +1001,12 @@ async def compare_country_group(
 
     merged_countries = await _merge_countries(country_group=country_group)
     store = await get_store()
-    if merged_countries:
+    if merged_countries is not None:
         # Resolve to ISO3 first so the country list passed to the store
         # accepts both names and codes uniformly.
         merged_countries = [store.resolve_country(c) for c in merged_countries]
     countries = store.countries(region=region, income=income)
-    if merged_countries:
+    if merged_countries is not None:
         countries = [c for c in countries if c["country_code"] in set(merged_countries)]
     rows = store.indicator_data(
         indicator_code,
@@ -883,6 +1058,7 @@ async def compare_country_group(
         result["csv"] = rows_to_csv(rows)
     else:
         result["rows"] = rows
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -931,6 +1107,7 @@ async def summarize_country_group(
             "top_n": top_n,
         },
     )
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -1006,6 +1183,7 @@ async def indicator_trend(
             params={
                 "indicator_code": indicator_code,
                 "countries": countries,
+                "country_group": country_group,
                 "region": region,
                 "income": income,
                 "year_start": year_start,
@@ -1019,6 +1197,7 @@ async def indicator_trend(
     warning = _period_warning(rows)
     if warning:
         result.setdefault("warnings", []).append(warning)
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -1058,7 +1237,7 @@ async def compare_trends(
             "count": len(rows),
             "rows": rows,
         })
-    return {
+    result = {
         "indicator_codes": indicator_codes,
         "countries": countries,
         "country_group": country_group,
@@ -1068,6 +1247,21 @@ async def compare_trends(
         "year_end": year_end,
         "items": items,
     }
+    result["source"] = provenance(
+        workbook=store.path, operation="compare_trends",
+        params={
+            'indicator_codes': indicator_codes,
+            'countries': countries,
+            'country_group': country_group,
+            'region': region,
+            'income': income,
+            'year_start': year_start,
+            'year_end': year_end,
+            'top_per_indicator': top_per_indicator,
+        },
+    )
+    result.update(_group_report(store, country_group))
+    return result
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -1123,6 +1317,24 @@ async def rank_country_changes(
     warning = _period_warning(ranked)
     if warning:
         result.setdefault("warnings", []).append(warning)
+    result["source"] = provenance(
+        workbook=store.path, operation="rank_country_changes",
+        params={
+            'indicator_code': indicator_code,
+            'countries': countries,
+            'country_group': country_group,
+            'region': region,
+            'income': income,
+            'year_start': year_start,
+            'year_end': year_end,
+            'metric': metric,
+            'descending': descending,
+            'min_year_count': min_year_count,
+            'min_period_years': min_period_years,
+            'top': top,
+        },
+    )
+    result.update(_group_report(store, country_group))
     return result
 
 
@@ -1169,6 +1381,7 @@ async def assess_data_quality(
             "top": top,
         },
     )
+    result.update(_group_report(store, country_group))
     return result
 
 

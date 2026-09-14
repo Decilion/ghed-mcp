@@ -12,6 +12,8 @@ from ghed_mcp.client import (
 )
 from ghed_mcp import server
 
+REAL_GET_STORE = server.get_store
+
 
 @pytest.fixture
 def sample_workbook(tmp_path: Path) -> Path:
@@ -885,3 +887,300 @@ def test_normalize_source_document():
     assert doc["document_id"] == 64396441
     assert doc["date_modified"] == "2026-03-30T19:52:25Z"
     assert doc["download_url"].endswith("/DocumentationCentre/GetFile/64396441/en")
+
+
+async def test_curated_codes_never_match_country_name_fragments():
+    store = await server.get_store()
+    conn = store._connect()
+    for code, name in [('ZWE', 'Zimbabwe'), ('STP', 'Sao Tome and Principe'),
+                       ('MKD', 'North Macedonia'), ('PSE', 'occupied Palestinian territory, including east Jerusalem')]:
+        conn.execute('insert into countries values (?, ?, ?, ?)', (code, name, 'AFR', 'Low'))
+        conn.execute('insert into observations values (?, ?, ?, ?)', (code, 2023, 'che_gdp', 7))
+    conn.commit()
+    for group, excluded in [('LAC_TERRITORIES', {'ZWE', 'STP'}), ('EAP', {'MKD', 'PSE'})]:
+        result = await server.compare_country_group('che_gdp', country_group=group)
+        assert not excluded.intersection(row['country_code'] for row in result['rows'])
+        coverage = result['country_group_resolution']
+        assert not excluded.intersection(coverage['resolved_members'])
+        unsupported = {'ABW', 'PRI'} if group == 'LAC_TERRITORIES' else {'MAC', 'NCL'}
+        assert unsupported.issubset(coverage['unsupported_members'])
+    for unsupported in ['ABW', 'abw']:
+        with pytest.raises(ValueError, match='ISO3'):
+            store.resolve_country(unsupported)
+
+
+async def test_exact_country_names_win_before_fragments():
+    store = await server.get_store()
+    for code, name in [('NER', 'Niger'), ('NGA', 'Nigeria'), ('SDN', 'Sudan'), ('SSD', 'South Sudan')]:
+        store._connect().execute('insert into countries values (?, ?, ?, ?)', (code, name, 'AFR', 'Low'))
+    assert store.resolve_country('Niger') == 'NER'
+    assert store.resolve_country('sudan') == 'SDN'
+    with pytest.raises(ValueError):
+        store.resolve_country('Nig_r')
+
+
+@pytest.mark.parametrize('tool, kwargs, field', [
+    ('get_indicator_data', {'indicator_code': 'che_gdp'}, 'rows'),
+    ('compare_country_group', {'indicator_code': 'che_gdp'}, 'rows'),
+    ('compare_countries', {'indicator_code': 'che_gdp'}, 'rows'),
+    ('build_research_panel', {'indicator_codes': ['che_gdp']}, 'rows'),
+    ('indicator_trend', {'indicator_code': 'che_gdp'}, 'rows'),
+    ('rank_country_changes', {'indicator_code': 'che_gdp'}, 'rows'),
+])
+async def test_empty_curated_groups_do_not_widen(tool, kwargs, field):
+    # The synthetic workbook contains no EAP member.
+    result = await getattr(server, tool)(**kwargs, country_group='EAP')
+    assert result[field] == []
+    assert result['country_group_resolution']['resolved_members'] == []
+    assert result['country_group_resolution']['unsupported_members']
+
+
+async def test_empty_group_summaries_and_availability():
+    result = await server.data_availability(['che_gdp'], country_group='EAP')
+    assert result['items'][0]['observation_count'] == 0
+    result = await server.summarize_country_group('che_gdp', country_group='EAP')
+    assert result['country_count'] == result['countries_with_data'] == 0
+    result = await server.assess_data_quality('che_gdp', country_group='EAP')
+    assert result['availability']['observation_count'] == 0
+    assert result['metadata_summary']['metadata_rows'] == 0
+
+
+@pytest.mark.parametrize('filters', [
+    {'countries': ['COL'], 'income': 'High'},
+    {'country_group': 'LAC', 'income': 'High'},
+])
+async def test_quality_uses_same_population_as_data(filters):
+    data = await server.get_indicator_data('che_gdp', **filters)
+    quality = await server.assess_data_quality('che_gdp', **filters)
+    assert data['count'] == quality['availability']['observation_count'] == 0
+    assert quality['metadata_summary']['metadata_rows'] == 0
+
+
+async def test_empty_explicit_country_list_is_empty():
+    data = await server.get_indicator_data('che_gdp', countries=[])
+    assert data['rows'] == []
+
+
+async def test_missing_accounting_component_is_incomplete():
+    store = await server.get_store()
+    conn = store._connect()
+    conn.execute("delete from observations where country_code='COL' and indicator_code='fs3'")
+    conn.execute("update observations set value=65 where country_code='COL' and year=2023 and indicator_code='gghed'")
+    result = store.breakdown('gghed', country='COL', year=2023)
+    assert result['child_sum'] == 65
+    assert result['balanced'] is None
+    assert result['balance_status'] == 'incomplete'
+    assert result['missing_children'] == ['fs3']
+    assert result['difference'] is None
+
+
+async def test_zero_parent_accounting_balance():
+    store = await server.get_store()
+    conn = store._connect()
+    conn.execute("update observations set value=0 where country_code='COL' and indicator_code in ('gghed','fs1','fs3')")
+    result = store.breakdown('gghed', country='COL', year=2023)
+    assert result['balanced'] is True
+    assert result['balance_status'] == 'balanced'
+    assert result['relative_difference'] is None
+    conn.execute("update observations set value=1 where country_code='COL' and indicator_code='fs1'")
+    assert store.breakdown('gghed', country='COL', year=2023)['balanced'] is False
+
+
+async def test_nullable_category_matches_mcp_schema():
+    tool = server.mcp._tool_manager.get_tool('search_indicators')
+    args = tool.fn_metadata.arg_model.model_validate({'query': 'care', 'category_1': None})
+    result = await server.search_indicators(**args.model_dump())
+    assert any(row['category_1'] == 'HEALTH EXPENDITURE DATA' for row in result['items'])
+
+
+@pytest.mark.parametrize('tool, kwargs', [
+    ('build_research_panel', {'indicator_codes': ['che_gdp'], 'countries': ['COL']}),
+    ('compare_trends', {'indicator_codes': ['che_gdp'], 'country_group': 'LAC'}),
+    ('rank_country_changes', {'indicator_code': 'che_gdp', 'country_group': 'LAC'}),
+])
+async def test_research_outputs_include_reproducible_source(tool, kwargs):
+    result = await getattr(server, tool)(**kwargs)
+    assert result['source']['operation'] == tool
+    assert result['source']['params'].items() >= kwargs.items()
+    assert result['source']['workbook_modified_at']
+
+
+async def test_invalid_download_preserves_existing_workbook(monkeypatch, sample_workbook):
+    from ghed_mcp import client
+    original = sample_workbook.read_bytes()
+    async def invalid(_url, destination):
+        destination.write_bytes(b'<html>WHO maintenance</html>')
+    monkeypatch.setattr(client, '_stream_to_file', invalid)
+    with pytest.raises(client.GHEDError, match='Invalid GHED workbook'):
+        await client.download_workbook(destination=sample_workbook, source_url='https://example.test/data')
+    assert sample_workbook.read_bytes() == original
+    assert list(sample_workbook.parent.glob('tmp*.xlsx')) == []
+
+
+async def test_downloads_serialize_and_cold_cache_coalesces(monkeypatch, sample_workbook, tmp_path):
+    import asyncio
+    from ghed_mcp import client
+    payload = sample_workbook.read_bytes()
+    target = tmp_path / 'new.xlsx'
+    calls = 0
+    active = 0
+    peak = 0
+    async def stream(_url, destination):
+        nonlocal calls, active, peak
+        calls += 1
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.06)
+        destination.write_bytes(payload)
+        active -= 1
+    monkeypatch.setattr(client, '_stream_to_file', stream)
+    async def download(only_missing):
+        return await client.download_workbook(destination=target, source_url='https://example.test/data', if_missing=only_missing)
+    await asyncio.gather(download(True), download(True))
+    assert calls == 1
+    await asyncio.gather(download(False), download(False))
+    assert calls == 3 and peak == 1
+    client.validate_workbook(target)
+
+
+async def test_cached_store_observes_other_process_replacement(sample_workbook):
+    from openpyxl import load_workbook
+    first = server.GHEDStore(sample_workbook)
+    assert first.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 8.3
+    wb = load_workbook(sample_workbook)
+    wb['Data']['F3'] = 9.9
+    wb.save(sample_workbook)
+    wb.close()
+    second = server.GHEDStore(sample_workbook)
+    assert second.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
+    # First process still has its connection to the previous SQLite inode.
+    first.ensure_sqlite()
+    assert first.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
+    first.close()
+    second.close()
+
+
+def test_corrupt_workbook_failure_is_actionable(sample_workbook):
+    from ghed_mcp.client import GHEDError
+    sample_workbook.write_bytes(b'broken')
+    with pytest.raises(GHEDError, match='refresh_cache'):
+        server.GHEDStore(sample_workbook)
+
+
+async def test_download_lock_excludes_another_process(tmp_path):
+    import subprocess
+    import sys
+    from ghed_mcp.client import _download_lock
+    target = tmp_path / 'ghed.xlsx'
+    script = '''from filelock import FileLock, Timeout
+import sys
+try:
+    with FileLock(sys.argv[1], timeout=0.1):
+        sys.exit(1)
+except Timeout:
+    sys.exit(0)
+'''
+    async with _download_lock(target):
+        child = subprocess.run([sys.executable, '-c', script, str(target) + '.download.lock'], timeout=5)
+        assert child.returncode == 0
+
+
+async def test_cancelled_download_preserves_cache_and_cleans_staging(monkeypatch, sample_workbook):
+    import asyncio
+    from ghed_mcp import client
+    original = sample_workbook.read_bytes()
+    started = asyncio.Event()
+    async def stream(_url, destination):
+        destination.write_bytes(b'partial')
+        started.set()
+        await asyncio.Future()
+    monkeypatch.setattr(client, '_stream_to_file', stream)
+    task = asyncio.create_task(client.download_workbook(destination=sample_workbook, source_url='https://example.test/data'))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sample_workbook.read_bytes() == original
+    assert list(sample_workbook.parent.glob('tmp*.xlsx')) == []
+    # Cancellation released the process lock as well.
+    async with client._download_lock(sample_workbook):
+        pass
+
+
+def test_workbook_change_during_rebuild_preserves_sqlite(monkeypatch, sample_workbook):
+    import os
+    from ghed_mcp.client import GHEDError
+    store = server.GHEDStore(sample_workbook)
+    original = store.sqlite_path.read_bytes()
+    load = store._load_workbook_into
+    def change_source(conn, signature):
+        load(conn, signature)
+        stat = sample_workbook.stat()
+        os.utime(sample_workbook, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    monkeypatch.setattr(store, '_load_workbook_into', change_source)
+    with pytest.raises(GHEDError, match='changed during'):
+        store.rebuild_sqlite()
+    assert store.sqlite_path.read_bytes() == original
+    assert not list(sample_workbook.parent.glob('*.sqlite.tmp'))
+    store.close()
+
+
+async def test_merge_deduplicates_resolved_country_codes():
+    result = await server.compare_countries('che_gdp', countries=['Colombia', 'col'], country_group='LAC')
+    resolved = result['countries_resolved']
+    assert len(resolved) == len({row['code'] for row in resolved})
+    assert resolved[0] == {'input': 'Colombia', 'code': 'COL'}
+
+
+async def test_country_search_treats_wildcards_literally():
+    assert (await server.find_country_code(country='%'))['matches'] == []
+    assert (await server.find_country_code(country='Col_mb'))['matches'] == []
+
+
+async def test_cache_build_keeps_event_loop_responsive(monkeypatch, sample_workbook):
+    import asyncio
+    import time
+    from types import SimpleNamespace
+    ticks = 0
+    done = False
+    async def workbook(refresh=False):
+        return sample_workbook
+    def slow_store(_path, _signature):
+        time.sleep(0.08)
+        return SimpleNamespace(path=sample_workbook)
+    monkeypatch.setattr(server, 'ensure_workbook', workbook)
+    monkeypatch.setattr(server, '_store_for_path', slow_store)
+    monkeypatch.setattr(server, '_store_lock', asyncio.Lock())
+    async def heartbeat():
+        nonlocal ticks
+        while not done:
+            ticks += 1
+            await asyncio.sleep(0.005)
+    task = asyncio.create_task(heartbeat())
+    try:
+        await REAL_GET_STORE()
+    finally:
+        done = True
+        await task
+    assert ticks >= 3
+
+
+async def test_worker_built_stores_query_on_event_loop_after_refresh(monkeypatch, sample_workbook):
+    import asyncio
+    from openpyxl import load_workbook
+    async def workbook(refresh=False):
+        return sample_workbook
+    monkeypatch.setattr(server, 'ensure_workbook', workbook)
+    monkeypatch.setattr(server, '_store_lock', asyncio.Lock())
+    first = await REAL_GET_STORE()
+    assert first.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 8.3
+    wb = load_workbook(sample_workbook)
+    wb['Data']['F3'] = 9.9
+    wb.save(sample_workbook)
+    wb.close()
+    second = await REAL_GET_STORE(refresh=True)
+    assert second.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
+    assert first.indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
+    first.close()
+    second.close()
+    server._store_for_path.cache_clear()
