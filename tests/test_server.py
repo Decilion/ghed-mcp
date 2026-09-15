@@ -473,7 +473,7 @@ async def test_build_research_panel_warns_when_top_limit_reached():
     assert result["warnings"][0]["type"] == "top_limit_reached"
 
 
-async def test_trend_and_rank_tools():
+async def test_trend_and_rank_tools(sample_workbook):
     trend = await server.indicator_trend(
         "che_gdp",
         countries=["Colombia", "Peru"],
@@ -482,7 +482,15 @@ async def test_trend_and_rank_tools():
     )
     by_code = {row["country_code"]: row for row in trend["rows"]}
     assert by_code["COL"]["absolute_change"] == pytest.approx(0.2)
+    assert by_code["COL"]["percent_change"] == pytest.approx(0.2 / 8.1)
+    assert by_code["COL"]["change_units"]["absolute_change"] == "percentage points"
+    assert by_code["COL"]["change_units"]["percent_change"].startswith("fraction")
     assert by_code["PER"]["year_count"] == 1
+    assert by_code["PER"]["absolute_change"] is None
+    assert by_code["PER"]["percent_change"] is None
+    assert by_code["PER"]["cagr"] is None
+    assert by_code["PER"]["change_status"] == "insufficient_observations"
+    assert any(w["type"] == "insufficient_observations" for w in trend["warnings"])
 
     ranked = await server.rank_country_changes(
         "che_gdp",
@@ -491,6 +499,8 @@ async def test_trend_and_rank_tools():
         year_end=2023,
     )
     assert ranked["rows"][0]["country_code"] == "COL"
+    assert len(ranked["rows"]) == 1
+    assert ranked["excluded_insufficient_observations"] == 1
 
     compared = await server.compare_trends(
         ["che_gdp", "oops_che"],
@@ -500,6 +510,71 @@ async def test_trend_and_rank_tools():
         "che_gdp",
         "oops_che",
     ]
+    from openpyxl import load_workbook
+    wb = load_workbook(sample_workbook)
+    wb["Data"]["F2"] = 0
+    wb.save(sample_workbook)
+    wb.close()
+    undefined = await server.rank_country_changes("che_gdp", countries=["COL", "PER"], metric="percent_change")
+    assert undefined["rows"] == []
+    assert undefined["excluded_insufficient_observations"] == 1
+    assert undefined["excluded_undefined_metric"] == 1
+    assert undefined["warnings"][0]["excluded_count"] == 2
+    guarded = await server.rank_country_changes("che_gdp", countries=["COL", "PER"], metric="percent_change", min_year_count=2)
+    assert guarded["excluded_insufficient_observations"] == 0
+    assert guarded["excluded_undefined_metric"] == 1
+    assert "After the requested period guards" in guarded["exclusion_scope"]
+
+
+async def test_multi_trends_warn_and_filter_mixed_windows(sample_workbook):
+    equal_duration_windows = [
+        {"first_year": 2015, "latest_year": 2020, "period_years": 5},
+        {"first_year": 2016, "latest_year": 2021, "period_years": 5},
+    ]
+    assert server._period_warning(equal_duration_windows)["type"] == "mixed_periods"
+    from openpyxl import load_workbook
+    wb = load_workbook(sample_workbook)
+    wb["Data"]["E2"] = 2010
+    wb.save(sample_workbook)
+    wb.close()
+    result = await server.compare_trends(["che_gdp"], countries=["COL", "PER"])
+    assert result["items"][0]["warnings"][0]["type"] == "mixed_periods"
+    filtered = await server.compare_trends(
+        ["che_gdp"], countries=["COL", "PER"], min_year_count=2,
+        min_period_years=1, top_per_indicator=1,
+    )
+    item = filtered["items"][0]
+    assert [row["country_code"] for row in item["rows"]] == ["COL"]
+    assert item["possibly_truncated"] is True
+    assert item["warnings"][0]["type"] == "top_limit_reached"
+    assert filtered["source"]["params"]["min_year_count"] == 2
+
+
+async def test_provenance_labels_workbook_version_and_resolved_income():
+    result = await server.compare_country_group("che_gdp", income="LMIC")
+    source = result["source"]
+    assert source["income_resolved"] == ["Upper-middle"]
+    assert source["workbook_version"]["lines"]
+    assert "not WHO publication date" in source["workbook_modified_at_meaning"]
+    assert {row["income"] for row in result["rows"]} == set(source["income_resolved"])
+
+
+def test_warm_cache_cli_builds_and_reuses_fixture(sample_workbook, tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "GHED_MCP_CACHE_DIR": str(tmp_path)}
+    command = [sys.executable, "-c", "from ghed_mcp.server import main; main(['--warm-cache'])"]
+    first = subprocess.run(command, env=env, capture_output=True, text=True, check=True, timeout=30)
+    status = json.loads(first.stdout)
+    assert status["cache"]["sqlite_current"] is True
+    assert status["cache"]["counts"]["countries"] == 3
+    sqlite_path = Path(status["cache"]["sqlite_path"])
+    modified = sqlite_path.stat().st_mtime_ns
+    second = subprocess.run(command, env=env, capture_output=True, text=True, check=True, timeout=30)
+    assert json.loads(second.stdout)["cache"]["sqlite_current"] is True
+    assert sqlite_path.stat().st_mtime_ns == modified
 
 
 async def test_assess_data_quality():
@@ -1190,6 +1265,7 @@ async def test_group_query_and_provenance_keep_one_replaced_cache_snapshot(monke
     from openpyxl import load_workbook
     store = server.GHEDStore(sample_workbook)
     signature = store.snapshot_signature()
+    original_version = store.version()
     calls = 0
     async def get_store(refresh=False):
         nonlocal calls
@@ -1200,6 +1276,7 @@ async def test_group_query_and_provenance_keep_one_replaced_cache_snapshot(monke
     def replace_then_query(*args, **kwargs):
         wb = load_workbook(sample_workbook)
         wb['Data']['F3'] = 9.9
+        wb['Version']['A1'] = 'Replacement workbook version'
         wb.save(sample_workbook)
         wb.close()
         replacements.append(server.GHEDStore(sample_workbook))
@@ -1212,6 +1289,8 @@ async def test_group_query_and_provenance_keep_one_replaced_cache_snapshot(monke
         col = next(row for row in result['rows'] if row['country_code'] == 'COL')
         assert col['value'] == 8.3
         assert result['source']['dataset_signature'] == signature
+        assert result['source']['workbook_version'] == original_version
+        assert replacements[0].version() != original_version
         assert store.cache_status()['sqlite_current'] is False
         assert replacements[0].indicator_data('che_gdp', countries=['COL'], latest_only=True)[0]['value'] == 9.9
         assert replacements[0].snapshot_signature() != signature
