@@ -473,7 +473,7 @@ async def test_build_research_panel_warns_when_top_limit_reached():
     assert result["warnings"][0]["type"] == "top_limit_reached"
 
 
-async def test_trend_and_rank_tools():
+async def test_trend_and_rank_tools(sample_workbook):
     trend = await server.indicator_trend(
         "che_gdp",
         countries=["Colombia", "Peru"],
@@ -488,6 +488,7 @@ async def test_trend_and_rank_tools():
     assert by_code["PER"]["year_count"] == 1
     assert by_code["PER"]["absolute_change"] is None
     assert by_code["PER"]["percent_change"] is None
+    assert by_code["PER"]["cagr"] is None
     assert by_code["PER"]["change_status"] == "insufficient_observations"
     assert any(w["type"] == "insufficient_observations" for w in trend["warnings"])
 
@@ -509,6 +510,20 @@ async def test_trend_and_rank_tools():
         "che_gdp",
         "oops_che",
     ]
+    from openpyxl import load_workbook
+    wb = load_workbook(sample_workbook)
+    wb["Data"]["F2"] = 0
+    wb.save(sample_workbook)
+    wb.close()
+    undefined = await server.rank_country_changes("che_gdp", countries=["COL", "PER"], metric="percent_change")
+    assert undefined["rows"] == []
+    assert undefined["excluded_insufficient_observations"] == 1
+    assert undefined["excluded_undefined_metric"] == 1
+    assert undefined["warnings"][0]["excluded_count"] == 2
+    guarded = await server.rank_country_changes("che_gdp", countries=["COL", "PER"], metric="percent_change", min_year_count=2)
+    assert guarded["excluded_insufficient_observations"] == 0
+    assert guarded["excluded_undefined_metric"] == 1
+    assert "After the requested period guards" in guarded["exclusion_scope"]
 
 
 async def test_multi_trends_warn_and_filter_mixed_windows(sample_workbook):

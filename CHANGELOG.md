@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - A single observation now produces null change metrics rather than a false
   zero-change trend; such countries are excluded from change rankings.
+- Report undefined ranking metrics separately from insufficient observations,
+  with exclusion counts explicitly scoped to the requested period guards.
 - Warn on differing first/latest years, including equal-duration windows with
   different dates, and explain the selection bias when a trend limit is reached.
 

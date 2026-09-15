@@ -1396,7 +1396,17 @@ async def rank_country_changes(
         "count": len(ranked),
         "rows": ranked,
         "excluded_insufficient_observations": sum(row["year_count"] < 2 for row in rows),
+        "excluded_undefined_metric": sum(row["year_count"] >= 2 and row.get(metric) is None for row in rows),
+        "exclusion_scope": "After the requested period guards; countries with no observations are not counted.",
     }
+    if len(rows_with_metric) < len(rows):
+        result.setdefault("warnings", []).append({
+            "type": "undefined_change_metric",
+            "message": "Some countries lack the selected change metric after the requested period guards "
+                       "and are excluded from ranking. Inspect the exclusion counts. Relative change "
+                       "is undefined from zero; CAGR requires positive endpoints and a nonzero period.",
+            "excluded_count": len(rows) - len(rows_with_metric),
+        })
     warning = _period_warning(ranked)
     if warning:
         result.setdefault("warnings", []).append(warning)
