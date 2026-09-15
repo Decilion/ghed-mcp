@@ -112,6 +112,23 @@ an explicit operation; ordinary queries do not check WHO for new releases.
 The server uses the FastMCP API from MCP SDK 1.x (`mcp>=1.15.0,<2`). SDK 2.x is
 excluded because it changes that server API. Cache locking uses `filelock`.
 
+## Updating an existing checkout
+
+The September 2026 correctness and reliability changes are available on `main`
+and recorded under [Unreleased](CHANGELOG.md#unreleased). The package metadata
+version is still `0.5.1`; this source update does not create a package release.
+
+From your existing clone, with its virtual environment active:
+
+```bash
+git pull --ff-only
+python -m pip install -e .
+```
+
+Restart the MCP client so its server process loads the updated code and tool
+schemas. Reinstalling also updates dependencies: both servers require
+`mcp>=1.15.0,<2`; GHED additionally requires `filelock>=3.16,<4`.
+
 ## Tool reference
 
 Tool signatures show the **canonical parameter names** — the server rejects unknown kwargs (Pydantic `extra="forbid"`), so getting the names right matters. In particular: `country` is singular, `countries` is the list form, year filters are `year_start` / `year_end` (not `year_from` / `year_to`).
@@ -360,6 +377,11 @@ Inspect what each variable actually is before pulling — `explain_indicator_rel
 - `primary_health_care` — PHC spending levels and shares
 
 ## Development
+
+The 2026-09-14 regression suite contains 88 tests. GitHub Actions runs it
+on Python 3.11, 3.12 and 3.13 against the minimum and latest compatible MCP SDK,
+then builds both distributions and checks wheel imports outside the checkout.
+
 
 ```bash
 pip install -e ".[dev]"

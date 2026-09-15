@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Verify installed wheels outside the source checkout and reject AGENTS.md in sdists.
 
 ### Added
+- Document source-checkout upgrades, client restarts and SDK compatibility checks.
 - Focused regression tests for wrong regional membership, inconsistent filters,
   missing accounting data, MCP schema behavior and cache replacement safety.
 
