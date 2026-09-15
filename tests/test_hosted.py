@@ -91,8 +91,8 @@ def test_shared_rate_limit_and_health_exemption(monkeypatch, sample_workbook):
     app = asyncio.run(create_app("http://localhost", requests_per_minute=2))
     with TestClient(app, base_url="http://localhost", headers=HEADERS) as client:
         assert rpc(client, "ping").status_code == 200
-        assert rpc(client, "ping").status_code == 200
-        limited = rpc(client, "ping")
+        assert client.post("/mcp/", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 200
+        limited = client.post("/mcp/", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
         assert limited.status_code == 429 and limited.headers["Retry-After"] == "60"
         assert client.get("/healthz").status_code == 200
 
@@ -179,3 +179,31 @@ def test_failed_cache_preparation_never_serves_ready(monkeypatch):
     with pytest.raises(RuntimeError, match="prepare"):
         with TestClient(app, base_url="http://localhost"):
             pytest.fail("Startup must fail before accepting traffic")
+
+
+@pytest.mark.parametrize("failure", ["exception", "error-dict"])
+def test_internal_error_paths_never_reach_clients(monkeypatch, sample_workbook, failure):
+    monkeypatch.setenv("GHED_MCP_CACHE_DIR", str(sample_workbook.parent))
+    @wraps(server.list_indicators)
+    async def fail(**kwargs):
+        if failure == "exception":
+            raise ValueError(f"Invalid workbook {sample_workbook}")
+        return {"error": f"Cannot load {sample_workbook}"}
+    monkeypatch.setattr(server, "list_indicators", fail)
+    with TestClient(asyncio.run(create_app("http://localhost")), base_url="http://localhost", headers=HEADERS) as client:
+        response = rpc(client, "tools/call", {"name": "list_indicators"})
+        assert response.json()["result"]["isError"]
+        assert str(sample_workbook) not in response.text
+
+
+def test_shutdown_does_not_reopen_or_rebuild_workbook(monkeypatch, sample_workbook):
+    monkeypatch.setenv("GHED_MCP_CACHE_DIR", str(sample_workbook.parent))
+    with TestClient(asyncio.run(create_app("http://localhost")), base_url="http://localhost", headers=HEADERS):
+        assert server._cached_stores
+        stores = list(server._cached_stores)
+        sample_workbook.touch()
+        async def unexpected_load(*args, **kwargs):
+            pytest.fail("Shutdown must not reload the workbook")
+        monkeypatch.setattr(server, "get_store", unexpected_load)
+    assert all(store._conn is None for store in stores)
+    assert not server._cached_stores

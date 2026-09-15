@@ -29,6 +29,10 @@ logger = logging.getLogger("ghed_mcp.hosted")
 PRIVATE_FIELDS = {"path", "workbook_path", "sqlite_path"}
 
 
+class PilotError(ValueError):
+    """An intentional, client-safe hosted admission or query-limit message."""
+
+
 def public_result(value: Any) -> Any:
     """Remove machine-local paths while retaining data and WHO provenance."""
     if isinstance(value, dict):
@@ -68,7 +72,7 @@ class QueryWorker:
                    **kwargs: Any) -> Any:
         with self.lock:
             if len(self.pending) >= self.capacity:
-                raise ValueError("GHED is busy. Retry shortly with a smaller query.")
+                raise PilotError("GHED is busy. Retry shortly with a smaller query.")
             future = self.executor.submit(self._invoke, fn, kwargs)
             self.pending.add(future)
             future.add_done_callback(self._finished)
@@ -79,13 +83,8 @@ class QueryWorker:
 
     def _close(self) -> None:
         # Closing on the same thread respects SQLite's thread ownership.
-        async def close_store() -> None:
-            if server._store_for_path.cache_info().currsize:
-                store = await server.get_store()
-                store.close()
-                server._store_for_path.cache_clear()
         try:
-            self.runner.run(close_store())
+            server.close_cached_stores()
         finally:
             self.runner.close()
 
@@ -189,19 +188,21 @@ async def create_app(public_url: str, *, worker: QueryWorker | None = None,
                 bound.apply_defaults()
                 kwargs = bound.arguments
                 if kwargs.get("top", 0) > 10000:
-                    raise ValueError("Hosted queries allow top up to 10000. Narrow the selection or use the local package.")
+                    raise PilotError("Hosted queries allow top up to 10000. Narrow the selection or use the local package.")
                 result = await worker.call(fn, **kwargs)
                 # Infrastructure failures may embed local paths in error text.
-                if isinstance(result, dict) and result.get("error") and "status_code" in result:
+                if isinstance(result, dict) and result.get("error"):
                     raise RuntimeError("Upstream/cache failure")
                 result = public_result(result)
                 if len(json.dumps(result).encode()) > 8 * 1024 * 1024:
-                    raise ValueError("Result exceeds 8 MiB. Narrow the countries, years or variables.")
+                    raise PilotError("Result exceeds 8 MiB. Narrow the countries, years or variables.")
                 return result
             except TimeoutError:
                 raise ValueError("GHED query timed out. Retry with a smaller selection.") from None
-            except ValueError:
+            except PilotError:
                 raise
+            except ValueError:
+                raise ValueError("Invalid GHED query. Check country and indicator codes, filters and format.") from None
             except Exception:
                 logger.error("Hosted query failed: %s", fn.__name__)
                 raise ValueError("GHED could not complete this query. Please retry later.") from None

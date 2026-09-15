@@ -124,3 +124,16 @@ Keep a dated record of local tests, actual MCP HTTP round trips, resource usage,
 independent review, deployed commit and both browser-client checks. Public
 deployment, billing approval and browser-client checks remain separate from
 the local preparation described here.
+
+Local preparation on 2026-09-15: 105 regression tests pass. Three simultaneous
+SDK HTTP clients queried the full, previously validated WHO snapshot and
+verified comparisons, exports, resources, provenance and refresh rejection.
+An independent Claude Opus 5 review identified error-message redaction and
+shutdown cleanup issues; both were corrected with reproducing regression tests.
+Its suspected trailing-slash rate-limit bypass did not reproduce: requests
+redirect to the protected endpoint, including HTTP 429 after the limit.
+
+On a Mac, building SQLite from the already downloaded workbook took 24.36
+seconds with 132.08 MiB peak sampled startup RSS; a cached start took 1.05
+seconds. These figures exclude download time and do not establish cloud
+performance. ChatGPT/Claude browser-client and live Render checks remain pending.
