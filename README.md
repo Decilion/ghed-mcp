@@ -216,6 +216,13 @@ schemas. Installation resolves declared dependencies: both servers require
 `mcp>=1.15.0,<2` and `httpx>=0.27.0`; GHED additionally requires
 `openpyxl>=3.1.0` and `filelock>=3.16,<4`.
 
+### Compatibility changes in 0.6.1
+
+In **0.6.1**, single-observation trends return null change metrics and
+`change_status="insufficient_observations"`; change rankings exclude them.
+Two or more observations are needed to establish change. Relative change
+and CAGR retain their existing fractional numeric convention, now labeled.
+
 ### Compatibility changes in 0.6.0
 
 Consumers should handle `balanced=null` when accounting components are missing,

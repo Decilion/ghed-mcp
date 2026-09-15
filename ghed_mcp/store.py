@@ -1473,9 +1473,10 @@ class GHEDStore:
                 "latest_value": last["value"],
                 "year_count": len(series),
                 "period_years": period_years,
-                "absolute_change": float(last["value"]) - float(first["value"]),
-                "percent_change": _pct_change(first["value"], last["value"]),
+                "absolute_change": float(last["value"]) - float(first["value"]) if len(series) >= 2 else None,
+                "percent_change": _pct_change(first["value"], last["value"]) if len(series) >= 2 else None,
                 "cagr": _cagr(first["value"], last["value"], period_years),
+                "change_status": "observed_endpoints" if len(series) >= 2 else "insufficient_observations",
                 "unit": indicator["unit"],
                 "currency": indicator["currency"],
                 "change_units": {
@@ -1484,7 +1485,7 @@ class GHEDStore:
                     "cagr": "fraction per year (0.10 = 10% per year)",
                 },
             })
-        out.sort(key=lambda row: row["absolute_change"], reverse=True)
+        out.sort(key=lambda row: (row["absolute_change"] is not None, row["absolute_change"] or 0), reverse=True)
         return out[:top]
 
     def quality_assessment(

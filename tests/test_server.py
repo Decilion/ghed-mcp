@@ -486,6 +486,10 @@ async def test_trend_and_rank_tools():
     assert by_code["COL"]["change_units"]["absolute_change"] == "percentage points"
     assert by_code["COL"]["change_units"]["percent_change"].startswith("fraction")
     assert by_code["PER"]["year_count"] == 1
+    assert by_code["PER"]["absolute_change"] is None
+    assert by_code["PER"]["percent_change"] is None
+    assert by_code["PER"]["change_status"] == "insufficient_observations"
+    assert any(w["type"] == "insufficient_observations" for w in trend["warnings"])
 
     ranked = await server.rank_country_changes(
         "che_gdp",
@@ -494,6 +498,8 @@ async def test_trend_and_rank_tools():
         year_end=2023,
     )
     assert ranked["rows"][0]["country_code"] == "COL"
+    assert len(ranked["rows"]) == 1
+    assert ranked["excluded_insufficient_observations"] == 1
 
     compared = await server.compare_trends(
         ["che_gdp", "oops_che"],
@@ -506,6 +512,11 @@ async def test_trend_and_rank_tools():
 
 
 async def test_multi_trends_warn_and_filter_mixed_windows(sample_workbook):
+    equal_duration_windows = [
+        {"first_year": 2015, "latest_year": 2020, "period_years": 5},
+        {"first_year": 2016, "latest_year": 2021, "period_years": 5},
+    ]
+    assert server._period_warning(equal_duration_windows)["type"] == "mixed_periods"
     from openpyxl import load_workbook
     wb = load_workbook(sample_workbook)
     wb["Data"]["E2"] = 2010
@@ -520,6 +531,7 @@ async def test_multi_trends_warn_and_filter_mixed_windows(sample_workbook):
     item = filtered["items"][0]
     assert [row["country_code"] for row in item["rows"]] == ["COL"]
     assert item["possibly_truncated"] is True
+    assert item["warnings"][0]["type"] == "top_limit_reached"
     assert filtered["source"]["params"]["min_year_count"] == 2
 
 

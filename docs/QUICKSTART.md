@@ -4,6 +4,9 @@ GHED MCP connects an AI assistant to WHO's public Global Health Expenditure
 Database workbook. Decilion maintains this independent software; WHO maintains
 the underlying data and methodology. This is not an official WHO product.
 
+See the [dated validation record](VALIDATION.md) for the live-workbook checks,
+assistant trials and their limits.
+
 ## Install and connect
 
 Follow the [installation and client setup](../README.md#install) for the
@@ -46,6 +49,10 @@ for a newer WHO workbook, use `check_for_updates`; adopt it deliberately with
 
 You do not need to learn all 35 tools. These are the main routes; the full
 catalog remains available for specialist work.
+
+Search uses text fragments rather than semantic matching. Try `out-of-pocket`,
+`GGE` or an indicator code instead of pasting a full question into a search
+tool. A search with no matches does not establish that the measure is absent.
 
 | Your task | Start here | What to check |
 |---|---|---|
@@ -94,6 +101,9 @@ parameters and limits.
   experiencing catastrophic or impoverishing health spending.
 - Inspect actual years. A profile can combine different reference years;
   a latest-value group comparison can combine different country years.
+- A single observation cannot establish change. Trend metrics are null for
+  that country, and change rankings exclude it. For observed trends, relative
+  change and CAGR are fractions; multiply by 100 to express them as percentages.
 - Distinguish missing observations from zeros. A nearly matching sum does not
   validate an accounting identity when a required component is absent.
 - Regional summaries are unweighted descriptive statistics of the selected

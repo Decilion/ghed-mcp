@@ -343,7 +343,12 @@ async def search_indicators(
     category_1: str | None = "INDICATORS",
     category_2: str | None = None,
 ) -> dict[str, Any]:
-    """Search headline GHED indicators by default; pass category_1=None for all variables."""
+    """Search headline indicators; use search_variables for detailed SHA series.
+
+    This is substring search, not semantic search. Use a short fragment such as
+    'out-of-pocket', 'GGE' or 'che_gdp', not a full research question. If no match,
+    shorten the query or use topics_index. category_1=None searches all variables.
+    """
     top = max(1, min(top, 200))
     store = await get_store()
     items = store.search_indicators(
@@ -378,7 +383,12 @@ async def search_variables(
     category_1: str | None = None,
     category_2: str | None = None,
 ) -> dict[str, Any]:
-    """Search all GHED Codebook variables, including detailed SHA series."""
+    """Search all Codebook variables; use search_indicators for headline measures.
+
+    This is substring search. Use a short code/name fragment, not a full question.
+    An empty result can mean the wording did not match; shorten the query or
+    use topics_index before concluding that a variable is unavailable.
+    """
     top = max(1, min(top, 200))
     store = await get_store()
     items = store.search_indicators(
@@ -529,7 +539,12 @@ async def get_country_metadata(
     indicator_code: str | None = None,
     top: int = 20,
 ) -> dict[str, Any]:
-    """Return source, data-type, and estimation notes from the Metadata sheet."""
+    """Return source, data-type and estimation notes from the Metadata sheet.
+
+    If no indicator-specific notes exist, query country alone for broader notes.
+    Country notes are context, not proof of the selected indicator's data type
+    or the cause of a trend. Empty metadata does not establish data quality.
+    """
     top = max(1, min(top, 100))
     store = await get_store()
     rows = store.country_metadata(country=country, indicator_code=indicator_code, top=top)
@@ -1145,13 +1160,13 @@ def _period_warning(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     ]
     if len(period_years) < 2:
         return None
-    spread = max(period_years) - min(period_years)
-    if spread < 5:
+    windows = {(row.get("first_year"), row.get("latest_year")) for row in rows}
+    if len(windows) < 2:
         return None
     return {
         "type": "mixed_periods",
         "message": (
-            "Trend windows differ across countries (range: "
+            "First/latest observation years differ across countries (duration range: "
             f"{min(period_years)}–{max(period_years)} years). Compare ranks "
             "with caution, or pass min_year_count / min_period_years to "
             "restrict the panel."
@@ -1159,6 +1174,27 @@ def _period_warning(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         "min_period_years": min(period_years),
         "max_period_years": max(period_years),
     }
+
+
+def _trend_warnings(rows: list[dict[str, Any]], top: int) -> list[dict[str, Any]]:
+    warnings = []
+    period_warning = _period_warning(rows)
+    if period_warning:
+        warnings.append(period_warning)
+    single = [row["country_code"] for row in rows if row["year_count"] < 2]
+    if single:
+        warnings.append({
+            "type": "insufficient_observations", "countries": single,
+            "message": "One observation cannot establish a trend. Change metrics are null, not zero.",
+        })
+    if len(rows) >= top:
+        warnings.append({
+            "type": "top_limit_reached", "top": top,
+            "message": "Rows are ordered by absolute change descending, with unavailable changes last. "
+                       "This limit may omit countries with smaller or negative changes. Increase top "
+                       "(top_per_indicator for compare_trends) or narrow the selection before comparing countries.",
+        })
+    return warnings
 
 
 @mcp.tool(annotations=READ_TOOL)
@@ -1224,10 +1260,8 @@ async def indicator_trend(
             },
         ),
     }
-    warning = _period_warning(rows)
     result["possibly_truncated"] = len(rows) >= top
-    if warning:
-        result.setdefault("warnings", []).append(warning)
+    result["warnings"] = _trend_warnings(rows, top)
     result.update(_group_report(store, country_group))
     return result
 
@@ -1270,14 +1304,13 @@ async def compare_trends(
             min_year_count=min_year_count,
             min_period_years=min_period_years,
         )
-        warning = _period_warning(rows)
         items.append({
             "indicator_code": indicator_code,
             "metadata": store.get_indicator(indicator_code),
             "count": len(rows),
             "rows": rows,
             "possibly_truncated": len(rows) >= top_per_indicator,
-            "warnings": [warning] if warning else [],
+            "warnings": _trend_warnings(rows, top_per_indicator),
         })
     result = {
         "indicator_codes": indicator_codes,
@@ -1362,6 +1395,7 @@ async def rank_country_changes(
         "min_period_years": min_period_years,
         "count": len(ranked),
         "rows": ranked,
+        "excluded_insufficient_observations": sum(row["year_count"] < 2 for row in rows),
     }
     warning = _period_warning(ranked)
     if warning:

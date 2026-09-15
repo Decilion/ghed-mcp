@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.1] - 2026-09-15
 
+### Fixed
+- A single observation now produces null change metrics rather than a false
+  zero-change trend; such countries are excluded from change rankings.
+- Warn on differing first/latest years, including equal-duration windows with
+  different dates, and explain the selection bias when a trend limit is reached.
+
 ### Added
 - Add `ghed-mcp --warm-cache` to prepare the workbook and SQLite cache before
   connecting clients with short tool timeouts.
