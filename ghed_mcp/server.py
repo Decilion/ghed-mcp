@@ -8,6 +8,7 @@ import logging
 import sys
 from functools import lru_cache
 from typing import Any
+from weakref import WeakSet
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
@@ -136,12 +137,25 @@ WRITE_EXTERNAL = ToolAnnotations(
 )
 
 
+_cached_stores: WeakSet[GHEDStore] = WeakSet()
+
+
 @lru_cache(maxsize=1)
 def _store_for_path(path: str, signature: tuple[int, int]) -> GHEDStore:
     # The signature is part of the cache key. Construct a fresh store for a new
     # workbook so rebuilding in a worker never closes a connection in use by
     # another tool on the event loop.
-    return GHEDStore(path)
+    store = GHEDStore(path)
+    _cached_stores.add(store)
+    return store
+
+
+def close_cached_stores() -> None:
+    """Close existing stores on their owning query thread without loading data."""
+    for store in list(_cached_stores):
+        store.close()
+    _cached_stores.clear()
+    _store_for_path.cache_clear()
 
 
 _store_lock = asyncio.Lock()

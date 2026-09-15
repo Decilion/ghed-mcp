@@ -20,6 +20,11 @@ and methodology.
 
 ## What it does
 
+**Hosted pilot in development:** the default package runs locally. A separate
+[HTTP hosting guide](docs/HOSTING.md) and Render blueprint are available on the
+pilot branch. No public GHED endpoint has been deployed or verified in ChatGPT
+or Claude's browser clients yet.
+
 `ghed-mcp` wraps the [WHO GHED all-data workbook](https://apps.who.int/nha/database) in task-oriented MCP tools so an AI assistant can answer questions like:
 
 - *"Build me a health-financing profile for Colombia."*

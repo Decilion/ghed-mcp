@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Prepare an opt-in public HTTP pilot with 34 read-only tools, resources and
+  a prompt. Retain all 35 tools in the default local stdio server.
+- Add single-thread query execution, bounded queues and request sizes, shared
+  request limits, host/origin validation and removal of server-local paths.
+- Close existing cached stores without loading a changed workbook during
+  hosted shutdown, and replace internal error text with client-safe messages.
+- Add a Render deployment blueprint and hosted operations guide. The service
+  is not deployed and no hosted URL is available yet.
+
 ## [0.6.1] - 2026-09-15
 
 ### Fixed
