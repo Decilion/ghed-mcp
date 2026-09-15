@@ -4,6 +4,13 @@ Release checks and publication use the existing GitHub repository and a PyPI
 Trusted Publisher. The publishing job uses short-lived GitHub OIDC credentials;
 no stored PyPI API token is required.
 
+## Publisher status
+
+[Version 0.6.0](https://pypi.org/project/mcp-server-ghed/0.6.0/) was published
+on 2026-09-14 (Bogota date). Trusted Publishing is active for the repository,
+workflow and environment below. Existing maintainers can proceed directly to
+Versioned release; pending-publisher setup is only needed for a new project.
+
 ## One-time PyPI setup
 
 In the package owner's PyPI account, open

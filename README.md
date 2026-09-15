@@ -40,13 +40,16 @@ The tool design reflects how health-financing researchers actually work: country
 
 Requires **Python 3.11 or newer**. Check yours with `python3 --version` — on macOS, `python3` from system Python is often 3.9, in which case install a current Python via `brew install python` (or pyenv) before continuing.
 
-Install the versioned release wheel in a virtual environment:
+Install **0.6.0** from [PyPI](https://pypi.org/project/mcp-server-ghed/0.6.0/) in a virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install https://github.com/Decilion/ghed-mcp/releases/download/v0.6.0/mcp_server_ghed-0.6.0-py3-none-any.whl
+python -m pip install mcp-server-ghed==0.6.0
 ```
+
+The same wheel and source archive are also available in the
+[GitHub release](https://github.com/Decilion/ghed-mcp/releases/tag/v0.6.0).
 
 Or install from a source checkout:
 
@@ -126,9 +129,8 @@ excluded because it changes that server API. Cache locking uses `filelock`.
 
 Version `0.6.0` includes the September 2026 correctness and reliability fixes.
 See the [changelog](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/CHANGELOG.md#060---2026-09-14) for details.
-Download the wheel from the [GitHub release](https://github.com/Decilion/ghed-mcp/releases/tag/v0.6.0)
-and install it in a virtual environment with
-`python -m pip install mcp_server_ghed-0.6.0-py3-none-any.whl`.
+Upgrade in your existing virtual environment with
+`python -m pip install --upgrade mcp-server-ghed==0.6.0`.
 
 From your existing clone, with its virtual environment active:
 
