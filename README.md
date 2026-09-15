@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://decilion.com">
-    <img src="assets/decilion-banner.png" alt="Decilion" width="100%">
+    <img src="https://raw.githubusercontent.com/Decilion/ghed-mcp/v0.6.0/assets/decilion-banner.png" alt="Decilion" width="100%">
   </a>
 </p>
 
@@ -114,9 +114,11 @@ excluded because it changes that server API. Cache locking uses `filelock`.
 
 ## Updating an existing checkout
 
-The September 2026 correctness and reliability changes are available on `main`
-and recorded under [Unreleased](CHANGELOG.md#unreleased). The package metadata
-version is still `0.5.1`; this source update does not create a package release.
+Version `0.6.0` includes the September 2026 correctness and reliability fixes.
+See the [changelog](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/CHANGELOG.md#060---2026-09-14) for details.
+Download the wheel from the [GitHub release](https://github.com/Decilion/ghed-mcp/releases/tag/v0.6.0)
+and install it in a virtual environment with
+`python -m pip install mcp_server_ghed-0.6.0-py3-none-any.whl`.
 
 From your existing clone, with its virtual environment active:
 
@@ -128,6 +130,14 @@ python -m pip install -e .
 Restart the MCP client so its server process loads the updated code and tool
 schemas. Reinstalling also updates dependencies: both servers require
 `mcp>=1.15.0,<2`; GHED additionally requires `filelock>=3.16,<4`.
+
+### Compatibility changes in 0.6.0
+
+Consumers should handle `balanced=null` when accounting components are missing,
+inspect `balance_status` and `complete`, and use `country_group_resolution` to
+understand excluded economies. Empty selections no longer expand to global data.
+Workbook-derived responses include `source.dataset_signature`, which identifies
+exactly the cached data used by that response.
 
 ## Tool reference
 
@@ -246,7 +256,7 @@ summarize_country_group(indicator_code="ext_che", country_group="LDC",
 list_countries(country_group="LAC", income="High")                # LAC HICs
 ```
 
-Curated-group members are **soft-resolved**: ISO3 codes the underlying source doesn't publish are silently dropped (e.g. `LAC_TERRITORIES` includes Aruba and Curaçao, which GHED doesn't cover). User-supplied `countries=` are still strict-resolved, so typos still raise.
+Curated-group members use exact workbook ISO3 membership. Unsupported members are omitted and reported in `country_group_resolution`; an empty selection returns no observations. User-supplied `countries=` remain strict, so unsupported codes and ambiguous names raise errors.
 
 ### Membership cadence
 
@@ -427,4 +437,4 @@ This server is one of Decilion's open-source contributions to the global health 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/LICENSE).

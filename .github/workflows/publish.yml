@@ -1,0 +1,109 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag (for example, v0.6.0)
+        required: true
+        type: string
+      dry_run:
+        description: Verify release assets without uploading to PyPI
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Verify published release and download its exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python - <<'PYTHON'
+          import json, os, re, subprocess, tomllib
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
+              raise SystemExit('Expected a stable version tag such as v1.2.3')
+          project = tomllib.loads(Path('pyproject.toml').read_text())['project']
+          if project['version'] != tag[1:]:
+              raise SystemExit('Tag and package version do not match')
+          release = json.loads(subprocess.check_output(
+              ['gh', 'release', 'view', tag, '--json', 'tagName,isDraft,isPrerelease'], text=True))
+          if release['isDraft'] or release['isPrerelease'] or release['tagName'] != tag:
+              raise SystemExit('Expected a published stable GitHub release')
+          subprocess.run(['gh', 'release', 'download', tag, '--dir', 'release-dist',
+              '--pattern', '*.whl', '--pattern', '*.tar.gz', '--pattern', 'SHA256SUMS'], check=True)
+          PYTHON
+          cd release-dist
+          sha256sum --check --strict SHA256SUMS
+      - name: Validate distributions and test the installed wheel
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python -m pip install "twine>=5" "pytest>=8" "pytest-asyncio>=0.23" 
+          python -m twine check release-dist/*.whl release-dist/*.tar.gz
+          python -m pip install release-dist/*.whl
+          python -I - <<'PYTHON'
+          import email, importlib.metadata, os, tarfile, zipfile
+          from pathlib import Path
+          import ghed_mcp
+          dist = Path('release-dist')
+          wheels, sdists = list(dist.glob('*.whl')), list(dist.glob('*.tar.gz'))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit('Expected exactly one wheel and one source distribution')
+          expected = os.environ['RELEASE_TAG'][1:]
+          assert ghed_mcp.__version__ == expected
+          assert importlib.metadata.version('mcp-server-ghed') == expected
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              names = [name for name in wheel.namelist() if name.endswith('.dist-info/METADATA')]
+              wheel_meta = email.message_from_bytes(wheel.read(names[0]))
+          with tarfile.open(sdists[0]) as sdist:
+              entries = [item for item in sdist.getmembers() if item.name.count('/') == 1 and item.name.endswith('/PKG-INFO')]
+              source_meta = email.message_from_bytes(sdist.extractfile(entries[0]).read())
+          for metadata in (wheel_meta, source_meta):
+              assert metadata['Name'] == 'mcp-server-ghed' and metadata['Version'] == expected
+          PYTHON
+          python -I -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -q -p no:cacheprovider
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-distributions
+          path: |
+            release-dist/*.whl
+            release-dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    if: ${{ !inputs.dry_run }}
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mcp-server-ghed
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-distributions
+          path: dist/
+      - name: Publish with PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1

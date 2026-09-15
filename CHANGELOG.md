@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-14
+
 ### Fixed
 - Resolve curated ISO3 codes exactly, report unsupported members, and preserve
   empty country selections. Exact country names take precedence over fragments.
