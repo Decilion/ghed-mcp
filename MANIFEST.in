@@ -5,4 +5,5 @@ include MANIFEST.in
 recursive-include assets *.png *.svg
 
 include RELEASING.md
+include render.yaml
 recursive-include docs *.md

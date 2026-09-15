@@ -1,0 +1,22 @@
+# Review billing and public access before creating this service.
+services:
+  - type: web
+    name: ghed-mcp-pilot
+    runtime: python
+    branch: codex/ghed-hosted-pilot
+    plan: 1c-2g
+    region: oregon
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: pip install -e '.[hosted]'
+    startCommand: python -m ghed_mcp.hosted --public --host 0.0.0.0
+    healthCheckPath: /healthz
+    disk:
+      name: ghed-cache
+      mountPath: /var/data/ghed
+      sizeGB: 2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.7
+      - key: GHED_MCP_CACHE_DIR
+        value: /var/data/ghed

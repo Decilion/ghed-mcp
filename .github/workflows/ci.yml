@@ -24,6 +24,17 @@ jobs:
         run: pip install "mcp==1.15.0" "filelock==3.16.0"
       - run: pytest -v
 
+  hosted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev,hosted]"
+      - run: pytest -q tests/test_hosted.py
+
   build:
     needs: test
     runs-on: ubuntu-latest
@@ -50,7 +61,8 @@ jobs:
           (path,) = glob.glob('dist/mcp_server_ghed-*.tar.gz')
           with tarfile.open(path) as t:
               names = t.getnames()
-          required = ['assets/decilion-banner.png', 'assets/decilion-banner.svg',
+          required = ['ghed_mcp/hosted.py', 'docs/HOSTING.md', 'render.yaml',
+                      'assets/decilion-banner.png', 'assets/decilion-banner.svg',
                       'LICENSE', 'README.md', 'CHANGELOG.md']
           forbidden = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md', 'dev-notes/']
           missing = [r for r in required if not any(r in n for n in names)]
