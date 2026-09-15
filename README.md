@@ -1,12 +1,16 @@
 <p align="center">
   <a href="https://decilion.com">
-    <img src="https://raw.githubusercontent.com/Decilion/ghed-mcp/v0.6.0/assets/decilion-banner.png" alt="Decilion" width="100%">
+    <img src="https://raw.githubusercontent.com/Decilion/ghed-mcp/v0.6.1/assets/decilion-banner.png" alt="Decilion" width="100%">
   </a>
 </p>
 
 # ghed-mcp
 
 A Model Context Protocol (MCP) server that gives AI assistants like Claude direct access to the **World Health Organization's Global Health Expenditure Database (GHED)**, built for comparative health-financing research.
+
+An independent open-source project by Decilion. It is not an official WHO
+product and does not imply WHO endorsement. WHO provides the underlying data
+and methodology.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
@@ -16,10 +20,10 @@ A Model Context Protocol (MCP) server that gives AI assistants like Claude direc
 
 ## What it does
 
-`ghed-mcp` wraps the [WHO GHED all-data workbook](https://apps.who.int/nha/database) in a small set of task-shaped MCP tools so an AI assistant can answer questions like:
+`ghed-mcp` wraps the [WHO GHED all-data workbook](https://apps.who.int/nha/database) in task-oriented MCP tools so an AI assistant can answer questions like:
 
 - *"Build me a health-financing profile for Colombia."*
-- *"Compare out-of-pocket burden across LAC countries since 2000."*
+- *"Compare out-of-pocket spending as a share of health expenditure across LAC countries since 2000."*
 - *"What's the government priority gradient by World Bank income group?"*
 - *"Decompose Peru's current health expenditure by financing scheme for 2023."*
 
@@ -36,6 +40,10 @@ Raw access to GHED is *technically* possible from an AI assistant with tool acce
 
 The tool design reflects how health-financing researchers actually work: country profiles, regional and income-group benchmarks, financing-mix decompositions, and metadata for citation.
 
+**First visit?** Start with the [researcher quickstart](https://github.com/Decilion/ghed-mcp/blob/main/docs/QUICKSTART.md)
+for a short route through the tools, example research prompts, interpretation
+checks, and what to include when reporting a problem.
+
 ## Install
 
 Requires **Python 3.11 or newer** and an MCP client that can launch local
@@ -43,23 +51,23 @@ stdio servers. Check `python3 --version` (Windows: `py -3 --version`) and use
 a supported interpreter before creating the environment. No WHO API key is required.
 The shell examples below use macOS/Linux.
 
-Install **0.6.0** from [PyPI](https://pypi.org/project/mcp-server-ghed/0.6.0/) in a virtual environment:
+Install **0.6.1** from [PyPI](https://pypi.org/project/mcp-server-ghed/0.6.1/) in a virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install mcp-server-ghed==0.6.0
+python -m pip install mcp-server-ghed==0.6.1
 ```
 
 On Windows PowerShell, use:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install mcp-server-ghed==0.6.0
+.\.venv\Scripts\python.exe -m pip install mcp-server-ghed==0.6.1
 ```
 
 The same wheel and source archive are also available in the
-[GitHub release](https://github.com/Decilion/ghed-mcp/releases/tag/v0.6.0).
+[GitHub release](https://github.com/Decilion/ghed-mcp/releases/tag/v0.6.1).
 
 Or install from a source checkout:
 
@@ -137,6 +145,18 @@ process environment to relocate it (use the client configuration when launched
 from a desktop app). `check_for_updates` checks WHO metadata without downloading
 the workbook; call `refresh_cache` explicitly to adopt a newer workbook.
 
+To prepare the cache before connecting a client with a short tool timeout,
+run this once in the installation environment and wait for it to finish:
+
+```bash
+ghed-mcp --warm-cache
+```
+
+On Windows, run `.\.venv\Scripts\ghed-mcp.exe --warm-cache`. This downloads
+and indexes the workbook only if needed, prints the status, and exits.
+It does not refresh an existing workbook. Use the same `GHED_MCP_CACHE_DIR`
+for this command and the MCP client if you customized that setting.
+
 ## Research correctness and cache behavior
 
 `country_profile(year=...)` uses the latest available value at or before the
@@ -154,6 +174,10 @@ Accounting breakdowns report `complete`, `missing_children`, and
 when a parent or component is missing. Missing values are not assumed to be
 zero; a fully observed zero parent and zero components can balance. Research
 panels, trends and rankings include workbook provenance and query parameters.
+The `source.workbook_version` lines come from the same SQLite snapshot as the
+response data. `workbook_modified_at` is a local cache timestamp, not WHO's
+release date. When an income filter is provided, `source.income_resolved`
+lists the matching workbook classes, including collective alias expansion.
 
 Downloads are serialized across processes, checked for archive integrity and
 required worksheet layouts, then atomically replace the workbook. Invalid
@@ -172,13 +196,13 @@ excluded because it changes that server API. Cache locking uses `filelock`.
 
 ## Updating
 
-Version `0.6.0` includes the September 2026 correctness and reliability fixes.
-See the [changelog](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/CHANGELOG.md#060---2026-09-14) for details.
+Version `0.6.1` includes the September 2026 correctness and reliability fixes.
+See the [changelog](https://github.com/Decilion/ghed-mcp/blob/v0.6.1/CHANGELOG.md#061---2026-09-15) for details.
 Upgrade in your existing virtual environment with
 `python -m pip install --upgrade mcp-server-ghed`.
 
 The unpinned upgrade command selects the newest compatible PyPI release.
-Use `mcp-server-ghed==0.6.0` to reproduce the version documented here.
+Use `mcp-server-ghed==0.6.1` to reproduce the version documented here.
 
 From your existing clone, with its virtual environment active:
 
@@ -256,7 +280,7 @@ either `country` or `country_name`, not both.
 | `compare_country_group` | `(indicator_code, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=True, top=5000, format="rows")` | One indicator across a country group (curated, regional, or income-based); `top` capped at 10,000 |
 | `summarize_country_group` | `(indicator_code, country_group=None, region=None, income=None, year=None, latest_only=True, top_n=5)` | Group stats, coverage, top/bottom countries, and mixed-year warnings; `top_n` capped at 25 |
 | `indicator_trend` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, min_year_count=None, min_period_years=None, top=1000)` | First/latest country trends for one indicator; `top` capped at 5,000 |
-| `compare_trends` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top_per_indicator=1000)` | First/latest country trends for multiple indicators; `top_per_indicator` capped at 5,000 |
+| `compare_trends` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top_per_indicator=1000, min_year_count=None, min_period_years=None)` | First/latest country trends with period guards and per-indicator warnings; `top_per_indicator` capped at 5,000 |
 | `rank_country_changes` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, metric="absolute_change", descending=True, min_year_count=None, min_period_years=None, top=20)` | Rank countries by absolute change, percent change, or CAGR; `top` capped at 200 |
 
 ### Research workflows
@@ -287,6 +311,12 @@ either `country` or `country_name`, not both.
 `summarize_country_group(year=...)` restricts observations to that exact year
 and takes precedence over `latest_only`. This differs from the at-or-before
 reference year used by `country_profile`.
+
+Trend results label `percent_change` and `cagr` as **fractions**: `0.10` means
+10% relative change or 10% per year, respectively. `absolute_change` is in the
+indicator's units, or **percentage points** for percentage indicators. Read
+`change_units`, actual first/latest years and any `possibly_truncated` flag.
+Multi-indicator trends apply the same period guards as single-indicator trends.
 
 ## Regional analysis
 
@@ -484,7 +514,7 @@ Inspect what each variable actually is before pulling; `explain_indicator_relati
 
 ## Development
 
-The 2026-09-14 regression suite contains 88 tests. GitHub Actions runs it
+The 2026-09-15 regression suite contains 91 tests. GitHub Actions runs it
 on Python 3.11, 3.12, 3.13 and 3.14 against the minimum and latest compatible MCP SDK,
 then builds both distributions and checks wheel imports outside the checkout.
 
@@ -542,4 +572,4 @@ This server is one of Decilion's open-source contributions to the global health 
 
 ## License
 
-MIT. See [LICENSE](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/LICENSE).
+MIT. See [LICENSE](https://github.com/Decilion/ghed-mcp/blob/v0.6.1/LICENSE).

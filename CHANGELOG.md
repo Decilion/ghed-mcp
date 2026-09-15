@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-15
+
+### Added
+- Add `ghed-mcp --warm-cache` to prepare the workbook and SQLite cache before
+  connecting clients with short tool timeouts.
+- Include snapshot-consistent workbook version notes and resolved income
+  classes in data provenance, while preserving existing fields.
+- Label trend units explicitly: relative changes and CAGR are fractions;
+  absolute changes in percentage indicators are percentage points.
+- Add period guards and per-indicator period/truncation information to
+  `compare_trends`, plus truncation information to `indicator_trend`.
+
+### Improved
+- Provide MCP initialization guidance for tool selection, preliminary data,
+  denominators, country groups and incomplete accounting identities.
+- Clarify trend and accounting tool descriptions without removing tools.
+
 ### Documentation
+- Add a researcher quickstart with task-to-tool guidance, research prompts,
+  citation details and an explicit independent-project statement.
 - Clarify platform installation, MCP client setup, bundled country-group dates,
   research examples, CSV validation and the Trusted Publishing release procedure.
 

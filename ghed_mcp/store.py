@@ -257,10 +257,17 @@ class GHEDStore:
         return json.loads(row[0])
 
     def provenance(self, *, operation: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        return provenance(
+        result = provenance(
             workbook=self.path, operation=operation, params=params,
             source_signature=self.snapshot_signature(),
         )
+        # Read the version from this connection's snapshot, never from a newer
+        # workbook or download manifest that may have replaced it mid-request.
+        result["workbook_version"] = self.version()
+        result["workbook_modified_at_meaning"] = "Local cache file timestamp, not WHO publication date."
+        if params and "income" in params:
+            result["income_resolved"] = self.normalize_income(params["income"])
+        return result
 
     def close(self) -> None:
         if self._conn is not None:
@@ -1402,7 +1409,8 @@ class GHEDStore:
         min_period_years: int | None = None,
         top: int = 1000,
     ) -> list[dict[str, Any]]:
-        if self.get_indicator(indicator_code) is None:
+        indicator = self.get_indicator(indicator_code)
+        if indicator is None:
             raise ValueError(f"Unknown GHED indicator '{indicator_code}'.")
         region = self.normalize_region(region)
         incomes = self.normalize_income(income)
@@ -1468,6 +1476,13 @@ class GHEDStore:
                 "absolute_change": float(last["value"]) - float(first["value"]),
                 "percent_change": _pct_change(first["value"], last["value"]),
                 "cagr": _cagr(first["value"], last["value"], period_years),
+                "unit": indicator["unit"],
+                "currency": indicator["currency"],
+                "change_units": {
+                    "absolute_change": "percentage points" if indicator["unit"] == "Percentage" else indicator["unit"],
+                    "percent_change": "fraction (0.10 = 10% relative change)",
+                    "cagr": "fraction per year (0.10 = 10% per year)",
+                },
             })
         out.sort(key=lambda row: row["absolute_change"], reverse=True)
         return out[:top]

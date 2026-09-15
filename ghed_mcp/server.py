@@ -1,7 +1,9 @@
 """FastMCP server for GHED workbook analysis."""
 from __future__ import annotations
 
+import argparse
 import asyncio
+import json
 import logging
 import sys
 from functools import lru_cache
@@ -98,7 +100,27 @@ from .store import DEFAULT_PROFILE_INDICATORS, GHEDStore, dicts_to_csv, rows_to_
 # keyword arguments so misspelled filters fail instead of being ignored.
 ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 
-mcp = FastMCP("ghed")
+mcp = FastMCP("ghed", instructions=(
+    "Use search_indicators for headline measures, search_variables for detailed SHA variables, "
+    "and get_indicator_metadata to verify units and denominators. Use compare_countries for "
+    "named-country comparisons, summarize_country_group for unweighted descriptive summaries, "
+    "and build_research_package for CSV data with codebook and availability. "
+    "Check source.workbook_version for vintage and preliminary-data notes, and actual observation "
+    "years for every comparison. Local cache timestamps are not WHO publication dates. "
+    "LAC is the bundled 33-country selection, not an official WHO regional aggregate. "
+    "Income LMIC means Low + Lower-middle + Upper-middle; use Lower-middle for that single class. "
+    "Read source.income_resolved to see the actual classes selected. "
+    "Trend percent_change and cagr are fractions, not percentages; absolute changes in shares "
+    "are percentage points. An incomplete accounting breakdown cannot validate the identity, "
+    "even if observed components nearly sum to the total; do not infer missing components are nil. "
+    "Out-of-pocket expenditure shares do not measure household catastrophic spending incidence. "
+    "Keep source-supported facts separate from hypotheses: these tools do not establish "
+    "causal explanations, effects of omitted flows, or overall data quality from missing metadata. "
+    "Do not prescribe population weights for arbitrary ratios: pooled shares require compatible "
+    "numerators and matching denominators; an unweighted country median is descriptive. "
+    "get_country_metadata may require a country-only query when no indicator-specific notes exist; "
+    "keep those country notes distinct from evidence about the selected indicator."
+))
 
 # Read tools use openWorldHint=True because any of them may transparently
 # trigger a workbook download on a cold cache (ensure_workbook downloads
@@ -154,7 +176,12 @@ async def refresh_cache() -> dict[str, Any]:
 
 @mcp.tool(annotations=READ_TOOL)
 async def cache_status() -> dict[str, Any]:
-    """Return local workbook and derived SQLite cache status."""
+    """Return cache status and WHO source-document details; initializes an empty cache.
+
+    The first call may take minutes. Run ghed-mcp --warm-cache in a terminal first
+    if the MCP client has a short tool timeout. Use check_for_updates to check
+    for newer WHO data without downloading the workbook.
+    """
     store = await get_store()
     result = {
         "source": store.provenance(operation="cache_status"),
@@ -620,7 +647,12 @@ async def build_additive_breakdown(
     year: int,
     relationship_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build and validate an additive breakdown for one country-year."""
+    """Check a current-NCU accounting total for one country-year.
+
+    Use additive_hierarchy to choose a relationship. If complete is false,
+    the identity cannot be validated even when observed components nearly sum
+    to the total. Missing components are not zero or implicitly included elsewhere.
+    """
     store = await get_store()
     result = store.breakdown(
         indicator_code,
@@ -1142,7 +1174,12 @@ async def indicator_trend(
     min_period_years: int | None = None,
     top: int = 1000,
 ) -> dict[str, Any]:
-    """Compute country-level first/latest trends for one GHED indicator."""
+    """Compute first/latest trends for one indicator; use compare_trends for several.
+
+    percent_change and cagr are fractions (0.10 = 10%). absolute_change is in
+    the indicator's units, or percentage points for shares. Inspect actual
+    first/latest years and change_units before interpreting or ranking results.
+    """
     top = max(1, min(top, 5000))
     store = await get_store()
     merged_countries = await _merge_countries(
@@ -1188,6 +1225,7 @@ async def indicator_trend(
         ),
     }
     warning = _period_warning(rows)
+    result["possibly_truncated"] = len(rows) >= top
     if warning:
         result.setdefault("warnings", []).append(warning)
     result.update(_group_report(store, country_group))
@@ -1204,8 +1242,14 @@ async def compare_trends(
     year_start: int | None = None,
     year_end: int | None = None,
     top_per_indicator: int = 1000,
+    min_year_count: int | None = None,
+    min_period_years: int | None = None,
 ) -> dict[str, Any]:
-    """Compute first/latest trend summaries for multiple GHED indicators."""
+    """Compute first/latest summaries for several indicators; use indicator_trend for one.
+
+    percent_change and cagr are fractions (0.10 = 10%); absolute changes in
+    shares are percentage points. Check each item's years, warnings and limits.
+    """
     if not indicator_codes:
         raise ValueError("indicator_codes must be a non-empty list.")
     top_per_indicator = max(1, min(top_per_indicator, 5000))
@@ -1223,12 +1267,17 @@ async def compare_trends(
             year_start=year_start,
             year_end=year_end,
             top=top_per_indicator,
+            min_year_count=min_year_count,
+            min_period_years=min_period_years,
         )
+        warning = _period_warning(rows)
         items.append({
             "indicator_code": indicator_code,
             "metadata": store.get_indicator(indicator_code),
             "count": len(rows),
             "rows": rows,
+            "possibly_truncated": len(rows) >= top_per_indicator,
+            "warnings": [warning] if warning else [],
         })
     result = {
         "indicator_codes": indicator_codes,
@@ -1251,6 +1300,8 @@ async def compare_trends(
             'year_start': year_start,
             'year_end': year_end,
             'top_per_indicator': top_per_indicator,
+            'min_year_count': min_year_count,
+            'min_period_years': min_period_years,
         },
     )
     result.update(_group_report(store, country_group))
@@ -1272,7 +1323,12 @@ async def rank_country_changes(
     min_period_years: int | None = None,
     top: int = 20,
 ) -> dict[str, Any]:
-    """Rank countries by change in one indicator over the requested period."""
+    """Rank countries by change; use indicator_trend for unranked summaries.
+
+    metric='percent_change' and 'cagr' use fractions (0.10 = 10%), not percentage
+    units. 'absolute_change' uses percentage points for shares, otherwise the
+    indicator's original units. Compare actual first/latest years and change_units.
+    """
     if metric not in ("absolute_change", "percent_change", "cagr"):
         raise ValueError("metric must be one of absolute_change, percent_change, or cagr.")
     top = max(1, min(top, 200))
@@ -1558,8 +1614,21 @@ def _configure_logging() -> None:
     root.setLevel(logging.INFO)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Local MCP server for WHO GHED data.")
+    parser.add_argument(
+        "--warm-cache", action="store_true",
+        help="Download and index the workbook if needed, print status, then exit.",
+    )
+    args = parser.parse_args(argv)
     _configure_logging()
+    if args.warm_cache:
+        try:
+            status = asyncio.run(cache_status())
+        except (GHEDError, OSError, ValueError) as exc:
+            parser.exit(1, f"Could not prepare GHED cache: {exc}\n")
+        print(json.dumps(status, indent=2))
+        return
     mcp.run()
 
 
