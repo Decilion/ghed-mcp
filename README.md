@@ -6,7 +6,7 @@
 
 # ghed-mcp
 
-A Model Context Protocol (MCP) server that gives AI assistants like Claude direct access to the **World Health Organization's Global Health Expenditure Database (GHED)** — purpose-built for comparative health-financing research.
+A Model Context Protocol (MCP) server that gives AI assistants like Claude direct access to the **World Health Organization's Global Health Expenditure Database (GHED)**, built for comparative health-financing research.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
@@ -23,11 +23,11 @@ A Model Context Protocol (MCP) server that gives AI assistants like Claude direc
 - *"What's the government priority gradient by World Bank income group?"*
 - *"Decompose Peru's current health expenditure by financing scheme for 2023."*
 
-Country names, ISO3 codes, WHO region codes (`AFR`, `AMR`, `EMR`, `EUR`, `SEAR`, `WPR`) and World Bank income labels (`Low`, `Lower-middle`, `Upper-middle`, `High`) are all accepted, with aliases — `region="Americas"` and `income="UMIC"` work the same as the canonical values. Collective aliases match the academic global-health convention: `income="LMIC"` expands to the union of Low + Lower-middle + Upper-middle (not the World Bank's narrower lower-middle-only definition), and `income="MIC"` expands to Lower-middle + Upper-middle. CSV export is built in.
+Country names, ISO3 codes, WHO region codes (`AFR`, `AMR`, `EMR`, `EUR`, `SEAR`, `WPR`) and World Bank income labels (`Low`, `Lower-middle`, `Upper-middle`, `High`) are all accepted, with aliases; `region="Americas"` and `income="UMIC"` work the same as the canonical values. Collective aliases match the academic global-health convention: `income="LMIC"` expands to the union of Low + Lower-middle + Upper-middle (not the World Bank's narrower lower-middle-only definition), and `income="MIC"` expands to Lower-middle + Upper-middle. CSV export is built in.
 
 ## Why this exists
 
-Raw access to GHED is *technically* possible from any LLM — but in practice it's painful: there is no stable documented API, the all-data workbook contains over 4,000 variables across the SHA 2011 accounting framework, indicator codes are cryptic (`gghed_che` is "domestic general government health expenditure as a share of current health expenditure"), and not every variable is additive (you can't sum percentages or PPP values as accounting identities). `ghed-mcp` collapses the friction:
+Raw access to GHED is *technically* possible from an AI assistant with tool access, but in practice it's painful: there is no stable documented API, the all-data workbook contains thousands of variables across the SHA 2011 accounting framework, indicator codes are cryptic (`gghed_che` is "domestic general government health expenditure as a share of current health expenditure"), and not every variable is additive (you can't sum percentages or PPP values as accounting identities). `ghed-mcp` collapses the friction:
 
 - Discovers the latest **GHED all data** workbook automatically from WHO's Documentation Centre.
 - Caches the XLSX locally and builds a derived SQLite database for fast queries.
@@ -38,7 +38,10 @@ The tool design reflects how health-financing researchers actually work: country
 
 ## Install
 
-Requires **Python 3.11 or newer**. Check yours with `python3 --version` — on macOS, `python3` from system Python is often 3.9, in which case install a current Python via `brew install python` (or pyenv) before continuing.
+Requires **Python 3.11 or newer** and an MCP client that can launch local
+stdio servers. Check `python3 --version` (Windows: `py -3 --version`) and use
+a supported interpreter before creating the environment. No WHO API key is required.
+The shell examples below use macOS/Linux.
 
 Install **0.6.0** from [PyPI](https://pypi.org/project/mcp-server-ghed/0.6.0/) in a virtual environment:
 
@@ -46,6 +49,13 @@ Install **0.6.0** from [PyPI](https://pypi.org/project/mcp-server-ghed/0.6.0/) i
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install mcp-server-ghed==0.6.0
+```
+
+On Windows PowerShell, use:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install mcp-server-ghed==0.6.0
 ```
 
 The same wheel and source archive are also available in the
@@ -58,16 +68,25 @@ git clone https://github.com/Decilion/ghed-mcp.git
 cd ghed-mcp
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install -e .
 ```
 
-Then register the server with your MCP client.
+### Connect your MCP client
+
+Use the absolute path to the executable in the environment where you installed
+this package: `.venv/bin/ghed-mcp` on macOS/Linux, or
+`.venv\Scripts\ghed-mcp.exe` on Windows. In JSON, escape Windows backslashes,
+for example `C:\\Users\\you\\project\\.venv\\Scripts\\ghed-mcp.exe`.
+Merge the entry into any existing `mcpServers` object instead of replacing it.
 
 **Claude Code:**
 
 ```bash
-claude mcp add ghed /absolute/path/to/.venv/bin/ghed-mcp
+claude mcp add --transport stdio --scope user ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 ```
+
+`--scope user` makes the server available across Claude Code projects.
+Use `--scope local` if you want it only in the current project.
 
 **Claude Desktop:** add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
@@ -89,13 +108,39 @@ codex mcp add ghed -- /absolute/path/to/.venv/bin/ghed-mcp
 
 This writes an entry to `~/.codex/config.toml`. List or remove with `codex mcp list` / `codex mcp remove ghed`.
 
-**Other MCP-compatible clients** (Cursor, Cline, Continue, etc.): point them at the `ghed-mcp` console script in your venv. The MCP protocol is the same across clients — only the registration UI differs.
+**Other MCP-compatible clients** (Cursor, Cline, Continue, etc.): point them at the `ghed-mcp` console script in your venv. The MCP protocol is the same across clients; only the registration UI differs.
 
 Restart your client. The `ghed` server should appear with all tools, the `ghed://indicator/{indicator_code}`, `ghed://methodology`, `ghed://topics/{topic_id}`, and `ghed://research-use-cases/{use_case}` resources, and the `compare_health_expenditure` prompt available.
 
-The first call downloads the GHED all-data workbook (~30 MB) and builds a derived SQLite cache under `~/.cache/ghed-mcp/`. This takes 2–3 minutes on a fresh laptop; subsequent calls are instant. Set `GHED_MCP_CACHE_DIR` to relocate.
+### Verify the installation
+
+```bash
+python -m pip show mcp-server-ghed
+```
+
+On Windows, use `.\.venv\Scripts\python.exe -m pip show mcp-server-ghed`.
+After registering and restarting your client, ask it to call `ghed`'s
+`topics_index` tool. This checks the connection without fetching WHO data.
+The server exposes **35 tools**. Running `ghed-mcp` alone in a terminal
+starts a stdio process that waits for an MCP client; it is not a web server.
+
+If the server is missing, verify the absolute executable path, install into that
+same environment, and restart the client. If WHO is temporarily unavailable,
+retain the error and retry later; an upstream failure does not mean no data exists.
+
+The first **workbook-backed** call downloads the GHED workbook and builds a
+SQLite cache under `~/.cache/ghed-mcp/`. Even `cache_status` and `version` can
+trigger this on an empty cache; `topics_index` and `research_use_cases` do not.
+Initial setup can take several minutes depending on the workbook, network and
+machine. Later calls reuse the cache. Set `GHED_MCP_CACHE_DIR` in the MCP server
+process environment to relocate it (use the client configuration when launched
+from a desktop app). `check_for_updates` checks WHO metadata without downloading
+the workbook; call `refresh_cache` explicitly to adopt a newer workbook.
 
 ## Research correctness and cache behavior
+
+`country_profile(year=...)` uses the latest available value at or before the
+requested year. Inspect actual reference years and `mixed_reference_years`.
 
 Curated group members are matched against exact workbook ISO3 codes. Responses
 include `country_group_resolution` with supported and unsupported members; an
@@ -125,12 +170,15 @@ an explicit operation; ordinary queries do not check WHO for new releases.
 The server uses the FastMCP API from MCP SDK 1.x (`mcp>=1.15.0,<2`). SDK 2.x is
 excluded because it changes that server API. Cache locking uses `filelock`.
 
-## Updating an existing checkout
+## Updating
 
 Version `0.6.0` includes the September 2026 correctness and reliability fixes.
 See the [changelog](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/CHANGELOG.md#060---2026-09-14) for details.
 Upgrade in your existing virtual environment with
-`python -m pip install --upgrade mcp-server-ghed==0.6.0`.
+`python -m pip install --upgrade mcp-server-ghed`.
+
+The unpinned upgrade command selects the newest compatible PyPI release.
+Use `mcp-server-ghed==0.6.0` to reproduce the version documented here.
 
 From your existing clone, with its virtual environment active:
 
@@ -140,8 +188,9 @@ python -m pip install -e .
 ```
 
 Restart the MCP client so its server process loads the updated code and tool
-schemas. Reinstalling also updates dependencies: both servers require
-`mcp>=1.15.0,<2`; GHED additionally requires `filelock>=3.16,<4`.
+schemas. Installation resolves declared dependencies: both servers require
+`mcp>=1.15.0,<2` and `httpx>=0.27.0`; GHED additionally requires
+`openpyxl>=3.1.0` and `filelock>=3.16,<4`.
 
 ### Compatibility changes in 0.6.0
 
@@ -153,7 +202,14 @@ exactly the cached data used by that response.
 
 ## Tool reference
 
-Tool signatures show the **canonical parameter names** — the server rejects unknown kwargs (Pydantic `extra="forbid"`), so getting the names right matters. In particular: `country` is singular, `countries` is the list form, year filters are `year_start` / `year_end` (not `year_from` / `year_to`).
+Tables show defaults; capped limits are clamped to at least 1 and at most the
+listed maximum. Raising a limit beyond that maximum does not fetch more data.
+
+Tool signatures below show the **canonical parameter names**, omitting deprecated
+aliases. Unknown arguments are rejected, so getting the names right matters. In particular: `country` is singular, `countries` is the list form, year filters are `year_start` / `year_end` (not `year_from` / `year_to`).
+
+`find_country_code` also accepts the deprecated `country_name` alias. Pass
+either `country` or `country_name`, not both.
 
 ### Cache and version
 
@@ -173,10 +229,10 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 | `research_use_cases` | `()` | Literature-inspired GHED research workflows and recommended variables |
 | `suggest_variables_for_research_question` | `(question)` | Map a natural-language research question to likely GHED variables and cautions |
 | `list_variable_categories` | `()` | Counts by GHED Codebook category |
-| `list_indicators` | `(skip=0, top=50)` | Paginated headline indicators only (`category_1 = INDICATORS`) |
-| `list_variables` | `(category_1=None, category_2=None, skip=0, top=50)` | Paginated full GHED codebook variables |
-| `search_indicators` | `(query, top=50, category_1="INDICATORS", category_2=None)` | Search headline indicators by default |
-| `search_variables` | `(query, top=50, category_1=None, category_2=None)` | Search all variables, including detailed SHA series |
+| `list_indicators` | `(skip=0, top=50)` | Paginated headline indicators only (`category_1 = INDICATORS`); `top` capped at 200 |
+| `list_variables` | `(category_1=None, category_2=None, skip=0, top=50)` | Paginated full GHED codebook variables; `top` capped at 200 |
+| `search_indicators` | `(query, top=50, category_1="INDICATORS", category_2=None)` | Search headline indicators by default; `top` capped at 200 |
+| `search_variables` | `(query, top=50, category_1=None, category_2=None)` | Search all variables, including detailed SHA series; `top` capped at 200 |
 | `get_indicator_metadata` | `(indicator_code)` | Codebook metadata for one variable |
 
 ### Country resolution
@@ -185,29 +241,31 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 |---|---|---|
 | `list_countries` | `(region=None, income=None, country_group=None)` | Countries and territories in the workbook, optionally by group |
 | `list_country_groups` | `()` | Available GHED region and income group values |
+| `list_curated_country_groups` | `()` | Bundled group definitions, member counts and verification date |
+| `resolve_country_group_membership` | `(group)` | Expand a bundled group to its ISO3 list |
 | `find_country_code` | `(country)` | Resolve a country name fragment or alias to ISO3 |
-| `get_country_metadata` | `(country=None, indicator_code=None, top=20)` | Source, data-type, and estimation notes from the Metadata sheet |
+| `get_country_metadata` | `(country=None, indicator_code=None, top=20)` | Source, data-type, and estimation notes from the Metadata sheet; `top` capped at 100 |
 | `country_profile` | `(country, year=None, indicator_codes=None)` | Latest headline health expenditure values for one country |
 
 ### Data extraction
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `get_indicator_data` | `(indicator_code, country=None, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=False, top=1000)` | One indicator with optional country/group/year filters |
-| `compare_countries` | `(indicator_code, countries=None, country_group=None, year_start=None, year_end=None, latest_only=False, top=5000, format="rows")` | One indicator across countries, returned as tidy rows or CSV |
-| `compare_country_group` | `(indicator_code, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=True, top=5000, format="rows")` | One indicator across a country group (curated, regional, or income-based) |
-| `summarize_country_group` | `(indicator_code, country_group=None, region=None, income=None, year=None, latest_only=True, top_n=5)` | Group stats, coverage, top/bottom countries, and mixed-year warnings |
-| `indicator_trend` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, min_year_count=None, min_period_years=None, top=1000)` | First/latest country trends for one indicator |
-| `compare_trends` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top_per_indicator=1000)` | First/latest country trends for multiple indicators |
-| `rank_country_changes` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, metric="absolute_change", descending=True, min_year_count=None, min_period_years=None, top=20)` | Rank countries by absolute change, percent change, or CAGR |
+| `get_indicator_data` | `(indicator_code, country=None, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=False, top=1000)` | One indicator with optional country/group/year filters; `top` capped at 5,000 |
+| `compare_countries` | `(indicator_code, countries=None, country_group=None, year_start=None, year_end=None, latest_only=False, top=5000, format="rows")` | One indicator across countries, returned as tidy rows or CSV; `top` capped at 10,000 |
+| `compare_country_group` | `(indicator_code, country_group=None, region=None, income=None, year_start=None, year_end=None, latest_only=True, top=5000, format="rows")` | One indicator across a country group (curated, regional, or income-based); `top` capped at 10,000 |
+| `summarize_country_group` | `(indicator_code, country_group=None, region=None, income=None, year=None, latest_only=True, top_n=5)` | Group stats, coverage, top/bottom countries, and mixed-year warnings; `top_n` capped at 25 |
+| `indicator_trend` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, min_year_count=None, min_period_years=None, top=1000)` | First/latest country trends for one indicator; `top` capped at 5,000 |
+| `compare_trends` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top_per_indicator=1000)` | First/latest country trends for multiple indicators; `top_per_indicator` capped at 5,000 |
+| `rank_country_changes` | `(indicator_code, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, metric="absolute_change", descending=True, min_year_count=None, min_period_years=None, top=20)` | Rank countries by absolute change, percent change, or CAGR; `top` capped at 200 |
 
 ### Research workflows
 
 | Tool | Signature | Purpose |
 |---|---|---|
 | `data_availability` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None)` | Availability summary for one or more variables before panel construction |
-| `build_research_panel` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=10000, format="rows")` | Tidy long panel for multiple variables, countries, and years |
-| `build_research_package` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=100000)` | Export-ready data CSV, codebook CSV, availability CSV, and README text |
+| `build_research_panel` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=10000, format="rows")` | Tidy long panel for multiple variables, countries, and years; `top` capped at 100,000 |
+| `build_research_package` | `(indicator_codes, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=100000)` | Export-ready data CSV, codebook CSV, availability CSV, and README text; `top` capped at 200,000 |
 
 ### Quality and accounting checks
 
@@ -216,41 +274,51 @@ Tool signatures show the **canonical parameter names** — the server rejects un
 | `additive_hierarchy` | `(indicator_code)` | Known additive parent-child relationships for a variable |
 | `explain_indicator_relationship` | `(indicator_code)` | Classify a variable as total, component, ratio/share, amount, or context series |
 | `build_additive_breakdown` | `(indicator_code, country, year, relationship_id=None)` | Country-year breakdown with child sum, shares, and balance check |
-| `assess_data_quality` | `(indicator_code, country=None, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=20)` | Availability, metadata completeness, data-type mix, and caution flags |
+| `assess_data_quality` | `(indicator_code, country=None, countries=None, country_group=None, region=None, income=None, year_start=None, year_end=None, top=20)` | Availability, metadata completeness, data-type mix, and caution flags; `top` capped at 100 |
 
 ### Resources and prompts
 
-- **Resource** `ghed://indicator/{indicator_code}` — readable view of one indicator's metadata
-- **Resource** `ghed://methodology` — readable methodology guide for variable selection
-- **Resource** `ghed://topics/{topic_id}` — readable view of a curated topic and its indicator codes
-- **Resource** `ghed://research-use-cases/{use_case}` — readable view of one research use case
-- **Prompt** `compare_health_expenditure(countries, indicator)` — guided template for cross-country health-financing analysis
+- **Resource** `ghed://indicator/{indicator_code}`: readable view of one indicator's metadata
+- **Resource** `ghed://methodology`: readable methodology guide for variable selection
+- **Resource** `ghed://topics/{topic_id}`: readable view of a curated topic and its indicator codes
+- **Resource** `ghed://research-use-cases/{use_case}`: readable view of one research use case
+- **Prompt** `compare_health_expenditure(countries, indicator)`: guided template for cross-country health-financing analysis
+
+`summarize_country_group(year=...)` restricts observations to that exact year
+and takes precedence over `latest_only`. This differs from the at-or-before
+reference year used by `country_profile`.
 
 ## Regional analysis
 
-Both `gho-mcp` and `ghed-mcp` expose the same curated country groupings beyond what WHO and the World Bank publish as built-in dimensions. Pass `country_group="LAC"` (or any of the codes below) on the data tools and the server resolves to the right ISO3 list — without you having to enumerate codes by hand.
+Both `gho-mcp` and `ghed-mcp` expose the same curated country groupings beyond what WHO and the World Bank publish as built-in dimensions. Pass `country_group="LAC"` (or any of the codes below) on the data tools and the server resolves to the right ISO3 list without you having to enumerate codes by hand.
 
 ### Available groups
+
+These are the definitions bundled with this release, last verified in the source
+on **2026-05-06**. The World Bank region lists use **FY2026** definitions; they are
+not a live classification service. Member counts describe the curated lists,
+not the number of economies with observations in either WHO database.
 
 | Code | Definition | Members |
 |---|---|---|
 | `LAC` | 33 sovereign Latin American & Caribbean states (PAHO/Decilion convention) | 33 |
-| `LAC_TERRITORIES` | World Bank's 42-economy LAC region — sovereign states plus territories (Aruba, Cayman Islands, Curaçao, Puerto Rico, etc.) | 42 |
+| `LAC_TERRITORIES` | World Bank's 42-economy LAC region: sovereign states plus territories (Aruba, Cayman Islands, Curaçao, Puerto Rico, etc.) | 42 |
 | `EAP` | World Bank East Asia & Pacific (FY2026) | 38 |
 | `ECA` | World Bank Europe & Central Asia | 58 |
 | `MENA` | World Bank "Middle East, North Africa, Afghanistan and Pakistan" (FY2026) | 23 |
 | `MENA_EXCL_ISR_MLT` | MENA without Israel and Malta | 21 |
 | `NAR` | World Bank North America (Bermuda, Canada, USA) | 3 |
-| `SAS` | World Bank South Asia (FY2026 — without AFG and PAK, now in MENA) | 6 |
+| `SAS` | World Bank South Asia (FY2026; without AFG and PAK, now in MENA) | 6 |
 | `SSA` | World Bank Sub-Saharan Africa | 48 |
 | `LDC` | UN Least Developed Countries | 44 |
 | `OECD` | OECD member countries | 38 |
 
-Aliases include natural-language ("Latin America and Caribbean", "Sub-Saharan Africa", "Least Developed Countries") and official codes (`LCN`, `SSF`, etc.). Two read-only tools — `list_curated_country_groups` and `resolve_country_group_membership` — let an assistant inspect or expand the lists at runtime.
+Aliases include natural-language ("Latin America and Caribbean", "Sub-Saharan Africa", "Least Developed Countries") and official codes (`LCN`, `SSF`, etc.). Two read-only tools, `list_curated_country_groups` and `resolve_country_group_membership`, let an assistant inspect or expand the lists at runtime.
 
 ### Using `country_group=` on the data tools
 
-`country_group=` merges (deduplicated) with any explicit `countries=` list and composes with `region` / `income` via AND semantics. Some illustrative calls — the first four work identically on both `ghed-mcp` and `gho-mcp`:
+`country_group=` merges (deduplicated) with any explicit `countries=` list and composes with `region` / `income` via AND semantics. The comments below identify the server for each call; indicator codes and
+response schemas differ between GHO and GHED:
 
 ```text
 compare_countries(indicator_code="oops_che", country_group="LAC",
@@ -258,7 +326,7 @@ compare_countries(indicator_code="oops_che", country_group="LAC",
 compare_countries(indicator_code="WHOSIS_000001", country_group="OECD",
                   year_start=2010, year_end=2023)                 # GHO
 list_curated_country_groups()                                     # both
-resolve_country_group_membership("LAC")                           # both — returns 33 ISO3 codes
+resolve_country_group_membership("LAC")                           # both; returns 33 ISO3 codes
 
 # ghed-mcp also exposes:
 build_research_panel(indicator_codes=["che_gdp", "gghed_che"],
@@ -272,28 +340,36 @@ Curated-group members use exact workbook ISO3 membership. Unsupported members ar
 
 ### Membership cadence
 
-The lists are static Python data baked into each package — no runtime refresh, no separate cache. Users get updates by reinstalling the package.
+The lists are static Python data bundled with each package. Membership changes
+require a new package release and an upgrade; reinstalling the same version does
+not refresh them. WHO region/income values come from the respective data source
+and should not be assumed to represent historical classifications for every year.
 
-The `LAST_VERIFIED` constant in `country_groups.py` records when each list was last cross-checked against:
+The `LAST_VERIFIED` constant in `country_groups.py` records the bundled review
+date. Consult the authoritative sources for subsequent changes:
 
 - World Bank country and lending groups: <https://datahelpdesk.worldbank.org/knowledgebase/articles/906519>
-- UN Least Developed Countries: <https://www.un.org/development/desa/dpad/least-developed-country-category.html>
-- OECD members: <https://www.oecd.org/about/document/list-oecd-member-countries.htm>
+- UN Least Developed Countries: <https://policy.desa.un.org/least-developed-countries>
+- OECD members: <https://www.oecd.org/en/about/members-partners.html>
 
-Re-check annually. Known upcoming changes at the time of writing: Bangladesh, Lao PDR, and Nepal are scheduled to graduate from LDC status on 2026-11-24; Solomon Islands on 2027-12-13.
+Re-check before time-sensitive group comparisons and at least annually. See the
+[UN graduation updates](https://www.un.org/ldcportal/content/support-ldc-graduation)
+for scheduled changes; the package does not automatically remove graduating LDCs.
 
 The same `country_groups.py` file lives in both `ghed-mcp` and `gho-mcp` (canonical source: `ghed-mcp`), so both servers start from the same definitions. Actual supported membership
 can differ by database; inspect the reported unsupported codes before combining extracts.
 
 ## Examples
 
-Each block below shows a natural-language prompt and a sketch of the underlying tool calls.
+Each block below shows a natural-language prompt and a sketch of the underlying
+MCP tool calls. These calls illustrate arguments for your assistant; they are not
+standalone Python scripts. Actual values and coverage depend on the WHO source.
 
 **Country profile**
 
 > *"Give me a Colombia health-financing profile."*
 
-The assistant calls `country_profile(country="Colombia")` and returns CHE as % GDP, CHE per capita (USD), government share of CHE, OOP share of CHE, external share, GGHE-D as % GDP, and GGHE-D as % GGE — all latest year, with a `mixed_reference_years` warning if reference years differ.
+The assistant calls `country_profile(country="Colombia")` and returns CHE as % GDP, CHE per capita (USD), government share of CHE, OOP share of CHE, external share, GGHE-D as % GDP, and GGHE-D as % GGE, each for its latest available year, with a `mixed_reference_years` warning if reference years differ.
 
 **Comparative LAC analysis**
 
@@ -335,13 +411,18 @@ build_additive_breakdown(
 )
 ```
 
-and returns each child component (HF.1, HF.2, HF.3, HF.4, HF.nec) with its share of the parent and a balance check (`balanced: true`) confirming the sum reconciles.
+and returns each child component (HF.1, HF.2, HF.3, HF.4, HF.nec) with its value,
+share of the parent where defined, and `balance_status`. Only fully observed
+components that reconcile within tolerance yield `balanced=true`; incomplete
+breakdowns return `balanced=null`, and complete non-reconciling ones return false.
+This example does not assume Peru has a complete breakdown for that year.
 
 ## From CSV output to analysis tools
 
 `compare_countries(..., format="csv")` and `build_research_package(...)` return CSV strings under the `csv`, `data_csv`, `codebook_csv`, or `availability_csv` keys. Two common downstream paths:
 
-**To pandas** — for time-series analysis or modelling:
+**To pandas**, for time-series analysis or modelling (optional: install
+`pandas` and `matplotlib` in your analysis environment):
 
 ```python
 import io, pandas as pd
@@ -349,16 +430,19 @@ import io, pandas as pd
 # csv_text is the value of result["csv"] from compare_countries
 df = pd.read_csv(io.StringIO(csv_text))
 df["year"] = df["year"].astype(int)
-df = df.dropna(subset=["value"]).pivot_table(
-    index="year", columns="country_name", values="value"
-)
-df.plot(title="OOP share of CHE, Andean countries")
+# For a multi-indicator research package, select one indicator first.
+if df["indicator_code"].nunique() != 1:
+    raise ValueError("Select one indicator before pivoting.")
+if df.duplicated(["country_code", "year"]).any():
+    raise ValueError("Resolve duplicate country-year observations before pivoting.")
+df = df.pivot(index="year", columns="country_code", values="value")
+df.plot(title="Selected indicator by country")
 ```
 
 **To any external tool** (Excel, Google Sheets, R, Stata, Tableau, charting platforms, etc.):
 
 ```python
-with open("data.csv", "w") as f:
+with open("data.csv", "w", encoding="utf-8", newline="") as f:
     f.write(csv_text)
 ```
 
@@ -366,37 +450,37 @@ The columns `indicator_code`, `indicator_name`, `country_code`, `country_name`, 
 
 ## Advanced queries
 
-The friendly tools cover headline indicators, country/region/income-group filtering, year ranges, and the most common additive decompositions. For everything else — detailed SHA series by function, provider, disease/condition, cross-tabs, capital, age, COVID-19 reporting items — explore the full codebook with `list_variables` and `search_variables`:
+The friendly tools cover headline indicators, country/region/income-group filtering, year ranges, and the most common additive decompositions. For detailed SHA series by function, provider, disease/condition, cross-tabs, capital, age or COVID-19 reporting items, explore the full codebook with `list_variables` and `search_variables`:
 
 ```text
 list_variables(category_1="HEALTH EXPENDITURE DATA", category_2="HEALTH CARE FUNCTIONS")
 search_variables(query="diabetes", category_1="HEALTH EXPENDITURE DATA")
 ```
 
-For long-code SHA hierarchies (e.g. `sha11.HC`, `sha11.HP`, `sha11.HF`), use `additive_hierarchy(indicator_code=...)` — it returns curated codebook formulas first, then inferred direct children from the SHA long-code tree for current-NCU amount variables. Pair with `build_additive_breakdown` to validate any decomposition for a country-year.
+For long-code SHA hierarchies (e.g. `sha11.HC`, `sha11.HP`, `sha11.HF`), use `additive_hierarchy(indicator_code=...)`; it returns curated codebook formulas first, then inferred direct children from the SHA long-code tree for current-NCU amount variables. Pair with `build_additive_breakdown` to validate any decomposition for a country-year.
 
-Inspect what each variable actually is before pulling — `explain_indicator_relationship(indicator_code)` classifies it as `additive_parent`, `component`, `derived_ratio_or_share`, `amount_series`, or `context_or_conversion_series` and surfaces interpretation cautions.
+Inspect what each variable actually is before pulling; `explain_indicator_relationship(indicator_code)` classifies it as `additive_parent`, `component`, `derived_ratio_or_share`, `amount_series`, or `context_or_conversion_series` and surfaces interpretation cautions.
 
 ## Topics covered by `topics_index`
 
-- `core_spending` — CHE level and scale (CHE/GDP, CHE per capita USD/PPP)
-- `government_spending` — GGHE-D level, share of CHE, share of GDP, fiscal priority (GGE)
-- `out_of_pocket` — household burden, OOP share of CHE, OOP per capita
-- `external_aid` — external funding for health and donor dependence
-- `private_spending` — private domestic spending and voluntary prepayment
-- `capital` — capital health expenditure (HK)
-- `primary_health_care` — PHC level and share of CHE
-- `macro_context` — GDP, population, exchange rates, PPP conversion factors
+- `core_spending`: CHE level and scale (CHE/GDP, CHE per capita USD/PPP)
+- `government_spending`: GGHE-D level, share of CHE, share of GDP, fiscal priority (GGE)
+- `out_of_pocket`: household burden, OOP share of CHE, OOP per capita
+- `external_aid`: external funding for health and donor dependence
+- `private_spending`: private domestic spending and voluntary prepayment
+- `capital`: capital health expenditure (HK)
+- `primary_health_care`: PHC level and share of CHE
+- `macro_context`: GDP, population, exchange rates, PPP conversion factors
 
 `research_use_cases` adds literature-inspired patterns:
 
-- `health_financing_transition` — financing-mix change with income, time, or reform
-- `financial_protection_oop` — OOP indicators as macro context for UHC research
-- `government_priority` — government health-spending effort and priority in the public budget
-- `donor_dependence` — external funding dependence and its trajectory
-- `private_and_voluntary_insurance` — private, voluntary, and prepaid arrangements
-- `services_providers_sha` — detailed SHA series by function, provider, scheme, source
-- `primary_health_care` — PHC spending levels and shares
+- `health_financing_transition`: financing-mix change with income, time, or reform
+- `financial_protection_oop`: OOP indicators as macro context for UHC research
+- `government_priority`: government health-spending effort and priority in the public budget
+- `donor_dependence`: external funding dependence and its trajectory
+- `private_and_voluntary_insurance`: private, voluntary, and prepaid arrangements
+- `services_providers_sha`: detailed SHA series by function, provider, scheme, source
+- `primary_health_care`: PHC spending levels and shares
 
 ## Development
 
@@ -404,49 +488,58 @@ The 2026-09-14 regression suite contains 88 tests. GitHub Actions runs it
 on Python 3.11, 3.12, 3.13 and 3.14 against the minimum and latest compatible MCP SDK,
 then builds both distributions and checks wheel imports outside the checkout.
 
-
 ```bash
-pip install -e ".[dev]"
-pytest
+python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
 Tests use a synthetic GHED workbook fixture; no network access required for the standard suite.
 
+Release procedure: [RELEASING.md](https://github.com/Decilion/ghed-mcp/blob/main/RELEASING.md).
+
 ## Limitations
 
 - GHED does not expose a stable documented API. This server discovers the current all-data workbook from WHO's Documentation Centre and caches it locally; if WHO changes the directory structure or naming, the discovery logic will need a release.
-- First cold start downloads ~30 MB and builds a ~300 MB SQLite cache (2–3 minutes on a typical laptop). Subsequent calls reuse the cache; `refresh_cache` rebuilds it.
-- The all-data workbook contains over 4,000 variables. Detailed SHA series can be sparse for recent years; use `data_availability` and `assess_data_quality` before strong claims.
+- A workbook-backed cold start downloads and indexes the data. Download size,
+  cache size and duration vary by WHO release and machine; allow several minutes
+  and sufficient disk space.
+- The all-data workbook contains thousands of variables; use `list_variable_categories`
+  for current counts. Detailed SHA series can be sparse for recent years; use `data_availability` and `assess_data_quality` before strong claims.
 - Variant series (current NCU, constant NCU, current USD, constant USD, PPP, per-capita, %CHE, %GDP, %GGE) are **not interchangeable** as accounting identities. `additive_hierarchy` and `build_additive_breakdown` only validate current-NCU amount variables.
-- Aggregate values (regional, income-group, global) are not computed by GHED; this server does not recompute them. Use `summarize_country_group` for descriptive group statistics across reporting countries.
-- Latest years can be preliminary — inspect Version sheet and Metadata notes via `version` and `get_country_metadata`.
+- This server does not produce population-weighted regional, income-group or
+  global estimates. `summarize_country_group` computes unweighted descriptive
+  statistics over returned observations. With `latest_only=True`, country years
+  can differ; use a fixed `year` and inspect coverage for comparable summaries.
+- Latest years can be preliminary; inspect Version sheet and Metadata notes via `version` and `get_country_metadata`.
 
 ## About the WHO Global Health Expenditure Database
 
 The [WHO Global Health Expenditure Database](https://apps.who.int/nha/database) (GHED) is the World Health Organization's central platform for internationally comparable data on health spending. It is the authoritative source for indicators on:
 
-- **Levels and trends** of health expenditure across 195 countries and territories, with most series running from 2000 onward
-- **System of Health Accounts 2011 (SHA 2011)** — health expenditure decomposed by financing arrangements, revenues, providers, functions, diseases and conditions, capital formation, and primary health care
-- **Universal Health Coverage** financing context — government share, out-of-pocket burden, external funding, voluntary insurance
-- **Macro denominators and conversion variables** — GDP, population, exchange rates, price indexes — to support per-capita, %GDP, constant-price, and PPP-adjusted analysis
-- **Country-level metadata** — sources, data type (Documented / Estimated / Imputed), methods of estimation, country footnotes — for transparent citation
+- **Levels and trends** of health expenditure across countries and territories,
+  with most series running from 2000 onward; use `list_countries` for the cached workbook coverage
+- **System of Health Accounts 2011 (SHA 2011)**: health expenditure decomposed by financing arrangements, revenues, providers, functions, diseases and conditions, capital formation, and primary health care
+- **Universal Health Coverage** financing context: government share, out-of-pocket burden, external funding, voluntary insurance
+- **Macro denominators and conversion variables**: GDP, population, exchange rates, price indexes, to support per-capita, %GDP, constant-price, and PPP-adjusted analysis
+- **Country-level metadata**: sources, data type (Documented / Estimated / Imputed), methods of estimation, country footnotes, for transparent citation
 
-GHED underpins WHO's *Global Spending on Health* annual report, Health Accounts country profiles, and the financing chapter of *World Health Statistics*. The data is free and openly published — through the all-data workbook this server wraps, and through the [official GHED portal](https://apps.who.int/nha/database) with its own visualizations and downloads.
+GHED underpins WHO's *Global Spending on Health* annual report, Health Accounts country profiles, and the financing chapter of *World Health Statistics*. The data is free and openly published through the all-data workbook this server wraps, and through the [official GHED portal](https://apps.who.int/nha/database) with its own visualizations and downloads.
 
 **This MCP server is plumbing.** The data, the indicator definitions, the SHA 2011 methodological work, and the country-level data validation are all WHO's. If you use values retrieved through this server, please:
 
 - **Cite WHO as the source.** The `source` block on every data response includes the workbook path, modification time, parameters, and retrieval timestamp to make this straightforward.
-- **Visit the [GHED portal](https://apps.who.int/nha/database)** for indicator metadata, methodology notes, and the official visualizations. The MCP exposes the data; the portal provides the canonical context.
-- **Read the [*Global Spending on Health*](https://www.who.int/publications/i/item/9789240086746) annual report** for WHO's curated narrative analysis of what the data shows.
+- **Visit the [GHED portal](https://apps.who.int/nha/database)** for indicator metadata, methodology notes, and the official visualizations. The MCP exposes the data: the portal provides the canonical context.
+- **Read the [global health expenditure reports](https://www.who.int/teams/health-systems-governance-and-financing/health-financing/expenditure-tracking)** for WHO's curated narrative analysis of what the data shows.
 
 GHED is a public good. The most valuable contribution any user can make is to support and reference WHO's underlying data work.
 
 ## Built by
 
-[Decilion](https://decilion.com) — global health consulting across Latin America and the Caribbean, with an applied AI lens.
+[Decilion](https://decilion.com) provides global health consulting across Latin
+America and the Caribbean, including applied AI for global health.
 
 This server is one of Decilion's open-source contributions to the global health data community. It pairs naturally with [`gho-mcp`](https://github.com/Decilion/gho-mcp) for combined GHO + GHED workflows. If you use it in research, a brief acknowledgment is appreciated but not required.
 
 ## License
 
-MIT — see [LICENSE](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/LICENSE).
+MIT. See [LICENSE](https://github.com/Decilion/ghed-mcp/blob/v0.6.0/LICENSE).

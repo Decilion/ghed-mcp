@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Clarify platform installation, MCP client setup, bundled country-group dates,
+  research examples, CSV validation and the Trusted Publishing release procedure.
+
 ## [0.6.0] - 2026-09-14
 
 ### Fixed
