@@ -1,5 +1,11 @@
 # Researcher-readiness checks, 2026-09-15
 
+**Publication verified:** [0.6.1 is available on PyPI](https://pypi.org/project/mcp-server-ghed/0.6.1/)
+and [GitHub Releases](https://github.com/Decilion/ghed-mcp/releases/tag/v0.6.1).
+Both downloaded PyPI files match the approved GitHub assets byte for byte.
+A fresh PyPI installation passed cache warm-up, stdio initialization with 35
+tools, the common-year data comparison and single-observation ranking checks.
+
 This records a bounded evaluation of published GHED MCP 0.6.0 and the 0.6.1
 candidate prepared for researcher feedback. It covers software behavior and
 selected research workflows, not validation of WHO's underlying estimates or
