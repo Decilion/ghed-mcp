@@ -40,6 +40,16 @@ The tool design reflects how health-financing researchers actually work: country
 
 Requires **Python 3.11 or newer**. Check yours with `python3 --version` — on macOS, `python3` from system Python is often 3.9, in which case install a current Python via `brew install python` (or pyenv) before continuing.
 
+Install the versioned release wheel in a virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install https://github.com/Decilion/ghed-mcp/releases/download/v0.6.0/mcp_server_ghed-0.6.0-py3-none-any.whl
+```
+
+Or install from a source checkout:
+
 ```bash
 git clone https://github.com/Decilion/ghed-mcp.git
 cd ghed-mcp
@@ -389,7 +399,7 @@ Inspect what each variable actually is before pulling — `explain_indicator_rel
 ## Development
 
 The 2026-09-14 regression suite contains 88 tests. GitHub Actions runs it
-on Python 3.11, 3.12 and 3.13 against the minimum and latest compatible MCP SDK,
+on Python 3.11, 3.12, 3.13 and 3.14 against the minimum and latest compatible MCP SDK,
 then builds both distributions and checks wheel imports outside the checkout.
 
 

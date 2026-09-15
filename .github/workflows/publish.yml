@@ -37,7 +37,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python - <<'PYTHON'
-          import json, os, re, subprocess, tomllib
+          import hashlib, json, os, re, subprocess, tomllib
           from pathlib import Path
           tag = os.environ['RELEASE_TAG']
           if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
@@ -51,9 +51,16 @@ jobs:
               raise SystemExit('Expected a published stable GitHub release')
           subprocess.run(['gh', 'release', 'download', tag, '--dir', 'release-dist',
               '--pattern', '*.whl', '--pattern', '*.tar.gz', '--pattern', 'SHA256SUMS'], check=True)
+          folder = Path('release-dist')
+          expected = {path.name for path in folder.iterdir() if path.name.endswith(('.whl', '.tar.gz'))}
+          lines = (folder / 'SHA256SUMS').read_text().splitlines()
+          entries = [re.fullmatch(r'([a-f0-9]{64})  ([A-Za-z0-9_.-]+)', line) for line in lines]
+          if len(entries) != 2 or not all(entries) or {entry[2] for entry in entries} != expected or len(expected) != 2:
+              raise SystemExit('SHA256SUMS must list exactly the downloaded wheel and source archive')
+          for entry in entries:
+              if hashlib.sha256((folder / entry[2]).read_bytes()).hexdigest() != entry[1]:
+                  raise SystemExit(f'Checksum mismatch: {entry[2]}')
           PYTHON
-          cd release-dist
-          sha256sum --check --strict SHA256SUMS
       - name: Validate distributions and test the installed wheel
         env:
           RELEASE_TAG: ${{ inputs.tag }}
